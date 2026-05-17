@@ -34,3 +34,8 @@ projects/
 tasks/
 plans/
 mcp-needs-auth-cache.json
+
+# Persistent SQLite memory DB (personal session data)
+memory/lstack.db
+memory/lstack.db-shm
+memory/lstack.db-wal
