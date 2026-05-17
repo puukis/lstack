@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+# lstack — personal Claude Code environment CLI
+
+set -euo pipefail
+
+CLAUDE_DIR="${HOME}/.claude"
+VERSION="1.0.0"
+
+usage() {
+    cat <<EOF
+lstack ${VERSION} — Claude Code personal environment
+
+Commands:
+  init      Scaffold .claude/ in current project directory
+  settings  Regenerate settings.json for the current OS
+  memory    Open project or global MEMORY.md in \$EDITOR
+  logs      Tail tool-calls.log with color
+  status    Show hook health, memory sizes, session/compaction timestamps
+  clean     Prune logs >30 days; remove loop state for dead PIDs
+  help      Show this message
+EOF
+}
+
+cmd_init() {
+    local project_dir
+    project_dir="$(pwd)"
+
+    if [ -d "${project_dir}/.claude" ]; then
+        echo "Error: .claude/ already exists in ${project_dir}"
+        exit 1
+    fi
+
+    echo "Initializing lstack project in ${project_dir}..."
+
+    # Collect project info
+    printf 'Project name: '
+    read -r project_name
+    printf 'Tech stack (e.g. TypeScript/Node, Python/FastAPI): '
+    read -r project_stack
+    printf 'Test command (e.g. npm test, pytest): '
+    read -r test_cmd
+    printf 'Dev command (e.g. npm run dev): '
+    read -r dev_cmd
+    printf 'Build command (e.g. npm run build): '
+    read -r build_cmd
+    printf 'Lint command (e.g. npm run lint): '
+    read -r lint_cmd
+    printf 'Purpose (one line): '
+    read -r purpose
+
+    # Create directories
+    mkdir -p "${project_dir}/.claude/memory"
+    mkdir -p "${project_dir}/.claude/logs"
+
+    # Write project CLAUDE.md
+    cat > "${project_dir}/.claude/CLAUDE.md" <<CLAUDEEOF
+## Project
+Name:    ${project_name}
+Stack:   ${project_stack}
+Purpose: ${purpose}
+
+## Build & Test
+dev:   ${dev_cmd}
+build: ${build_cmd}
+test:  ${test_cmd}
+lint:  ${lint_cmd}
+
+## Architecture
+<!-- 2-3 sentences max: how is the code organized? -->
+
+## Conventions
+<!-- One rule per bullet. -->
+- Follow existing patterns in the codebase before introducing new ones
+- All new code must have tests
+
+## Memory
+See .claude/memory/MEMORY.md
+CLAUDEEOF
+
+    # Write project MEMORY.md
+    cat > "${project_dir}/.claude/memory/MEMORY.md" <<MEMEOF
+# ${project_name} — project memory index
+# Keep lean. Claude updates this as context accumulates.
+
+## Architecture
+See architecture.md
+
+## Debugging
+See debugging.md
+
+## Conventions
+See conventions.md
+MEMEOF
+
+    # Write empty memory files
+    printf '# Architecture\n<!-- Key architectural decisions and rationale -->\n' > "${project_dir}/.claude/memory/architecture.md"
+    printf '# Debugging\n<!-- Known issues, root causes, reproduction steps -->\n' > "${project_dir}/.claude/memory/debugging.md"
+    printf '# Conventions\n<!-- Project-specific coding conventions -->\n' > "${project_dir}/.claude/memory/conventions.md"
+
+    # Add logs to .gitignore
+    if [ -f "${project_dir}/.gitignore" ]; then
+        if ! grep -q '\.claude/logs' "${project_dir}/.gitignore"; then
+            printf '\n# Claude Code lstack logs\n.claude/logs/\n.claude/memory/handover.md\n' >> "${project_dir}/.gitignore"
+        fi
+    else
+        printf '# Claude Code lstack logs\n.claude/logs/\n.claude/memory/handover.md\n' > "${project_dir}/.gitignore"
+    fi
+
+    echo ""
+    echo "Done. Created:"
+    echo "  .claude/CLAUDE.md"
+    echo "  .claude/memory/MEMORY.md"
+    echo "  .claude/memory/architecture.md"
+    echo "  .claude/memory/debugging.md"
+    echo "  .claude/memory/conventions.md"
+    echo ""
+    echo "Next: Edit .claude/CLAUDE.md to fill in Architecture and Conventions."
+
+    # Regenerate global settings.json for current OS
+    bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${CLAUDE_DIR}/settings.json" 2>/dev/null && \
+        echo "settings.json regenerated for current OS." || \
+        echo "Warning: could not regenerate settings.json (run: lstack settings)"
+}
+
+cmd_memory() {
+    local editor="${EDITOR:-nano}"
+    local target
+
+    # Check for project memory first
+    git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "${git_root}" ] && [ -f "${git_root}/.claude/memory/MEMORY.md" ]; then
+        target="${git_root}/.claude/memory/MEMORY.md"
+        echo "Opening project memory: ${target}"
+    else
+        target="${CLAUDE_DIR}/memory/MEMORY.md"
+        echo "Opening global memory: ${target}"
+    fi
+
+    "${editor}" "${target}"
+}
+
+cmd_logs() {
+    local log_file="${CLAUDE_DIR}/logs/tool-calls.log"
+
+    if [ ! -f "${log_file}" ]; then
+        echo "No tool-calls.log found. Start a Claude session to generate logs."
+        exit 0
+    fi
+
+    # Tail with color: blocked=red, timestamps=dim
+    tail -f "${log_file}" | awk '
+    {
+        line = $0
+        if (line ~ /Blocked|blocked|BLOCKED|exit 2/) {
+            printf "\033[31m%s\033[0m\n", line
+        } else if (line ~ /^\[20[0-9][0-9]-/) {
+            # Dim the ISO timestamp portion
+            printf "\033[2m%s\033[0m\n", line
+        } else {
+            print line
+        }
+        fflush()
+    }'
+}
+
+cmd_status() {
+    echo "=== lstack status ==="
+    echo ""
+
+    # Hook health
+    echo "--- Hooks ---"
+    for hook in session-start pre-tool post-tool pre-compact stop; do
+        f="${CLAUDE_DIR}/hooks/${hook}.sh"
+        if [ -f "${f}" ]; then
+            if [ -x "${f}" ]; then
+                echo "  ✓ ${hook}.sh (executable)"
+            else
+                echo "  ✗ ${hook}.sh (NOT executable)"
+            fi
+        else
+            echo "  ✗ ${hook}.sh (MISSING)"
+        fi
+    done
+
+    echo ""
+    echo "--- Memory files ---"
+    for mf in MEMORY.md preferences.md patterns.md projects.md; do
+        f="${CLAUDE_DIR}/memory/${mf}"
+        if [ -f "${f}" ]; then
+            size="$(wc -c < "${f}" 2>/dev/null | tr -d ' ')"
+            echo "  ${mf}: ${size} bytes"
+        else
+            echo "  ${mf}: MISSING"
+        fi
+    done
+
+    echo ""
+    echo "--- Last session ---"
+    session_log="${CLAUDE_DIR}/logs/sessions.log"
+    if [ -f "${session_log}" ]; then
+        tail -3 "${session_log}"
+    else
+        echo "  No sessions logged yet"
+    fi
+
+    echo ""
+    echo "--- Last compaction ---"
+    compact_log="${CLAUDE_DIR}/logs/compactions.log"
+    if [ -f "${compact_log}" ]; then
+        tail -1 "${compact_log}"
+    else
+        echo "  No compactions logged yet"
+    fi
+
+    echo ""
+    echo "--- Loop state files ---"
+    log_dir="${CLAUDE_DIR}/logs"
+    if [ -d "${log_dir}" ]; then
+        loop_count=0
+        for _lf in "${log_dir}"/loop-*.json; do
+            [ -f "${_lf}" ] && loop_count=$(( loop_count + 1 )) || true
+        done
+        echo "  Active loop state files: ${loop_count}"
+        if [ "${loop_count}" -gt 0 ] 2>/dev/null; then
+            bash "${CLAUDE_DIR}/scripts/loop-detector.sh" 2>/dev/null || true
+        fi
+    else
+        echo "  Log directory not found"
+    fi
+}
+
+cmd_clean() {
+    local log_dir="${CLAUDE_DIR}/logs"
+    echo "Cleaning lstack logs..."
+
+    if [ ! -d "${log_dir}" ]; then
+        echo "No log directory found."
+        exit 0
+    fi
+
+    # Prune log files older than 30 days (excluding loop state files)
+    old_count=0
+    for f in "${log_dir}"/*.log; do
+        [ -f "${f}" ] || continue
+        if find "${f}" -mtime +30 -print 2>/dev/null | grep -q .; then
+            rm -f "${f}"
+            old_count=$(( old_count + 1 ))
+        fi
+    done
+    echo "  Removed ${old_count} log file(s) older than 30 days"
+
+    # Remove loop state files for dead PIDs
+    dead_count=0
+    for f in "${log_dir}"/loop-*.json; do
+        [ -f "${f}" ] || continue
+        pid="$(basename "${f}" | sed 's/loop-//;s/\.json//')"
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            rm -f "${f}"
+            dead_count=$(( dead_count + 1 ))
+        fi
+    done
+    echo "  Removed ${dead_count} loop state file(s) for dead PIDs"
+
+    echo "Done."
+}
+
+cmd_settings() {
+    out="${CLAUDE_DIR}/settings.json"
+    echo "Regenerating ${out} for current OS..."
+    bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${out}"
+    echo "Done. Validating JSON..."
+    python3 -m json.tool "${out}" > /dev/null && echo "settings.json is valid." || echo "Warning: JSON validation failed."
+}
+
+# Main dispatch
+cmd="${1:-help}"
+shift 2>/dev/null || true
+
+case "${cmd}" in
+    init)     cmd_init "$@" ;;
+    settings) cmd_settings "$@" ;;
+    memory)   cmd_memory "$@" ;;
+    logs)     cmd_logs "$@" ;;
+    status)   cmd_status "$@" ;;
+    clean)    cmd_clean "$@" ;;
+    help|--help|-h) usage ;;
+    *)
+        echo "Unknown command: ${cmd}"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

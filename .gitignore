@@ -1,0 +1,36 @@
+# Runtime / logs
+logs/
+*.log
+loop-*.json
+reads-*.json
+
+# Personal memory (ephemeral / private)
+memory/handover.md
+memory/preferences.md
+memory/patterns.md
+memory/projects.md
+.claude/memory/
+
+# Credentials & auth
+.credentials.json
+
+# Session & cache data
+session-env/
+sessions/
+shell-snapshots/
+paste-cache/
+cache/
+downloads/
+backups/
+file-history/
+
+# History
+history.jsonl
+
+# Projects state (per-repo, not global)
+projects/
+
+# Ephemeral local state
+tasks/
+plans/
+mcp-needs-auth-cache.json
