@@ -131,6 +131,160 @@ if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
     fi
 fi
 
+# --- mid-session memory lookup ---
+if [ "${tool_name}" = "Read" ] || [ "${tool_name}" = "Bash" ]; then
+    MEM_STATE_FILE="${LOG_DIR}/mem-${PPID}.json"
+
+    # Increment call counter
+    _mem_call_count="$("${PYTHON}" -c "
+import json,sys
+f=sys.argv[1]
+try: d=json.load(open(f))
+except: d={}
+d['mem_call_count']=d.get('mem_call_count',0)+1
+json.dump(d,open(f,'w'))
+print(d['mem_call_count'])
+" "${MEM_STATE_FILE}" 2>/dev/null || echo "0")"
+
+    _mem_last_inject="$("${PYTHON}" -c "
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except: d={}
+print(d.get('mem_last_inject',-15))
+" "${MEM_STATE_FILE}" 2>/dev/null || echo "-15")"
+
+    _calls_since=$(( _mem_call_count - _mem_last_inject ))
+
+    if [ "${_calls_since}" -ge 15 ]; then
+        # Extract file path or command for dedup check
+        _mem_file_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
+import sys,json
+try:
+  d=json.loads(sys.stdin.read())
+  ti=d.get('tool_input',{})
+  print((ti.get('file_path') or ti.get('command',''))[:80])
+except: print('')
+" 2>/dev/null || echo '')"
+
+        _already_injected="$("${PYTHON}" -c "
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except: d={}
+files=d.get('mem_injected_files',[])
+print('1' if sys.argv[2] in files else '0')
+" "${MEM_STATE_FILE}" "${_mem_file_path}" 2>/dev/null || echo "0")"
+
+        if [ "${_already_injected}" = "0" ]; then
+            # Extract keywords from the tool input
+            _mem_keywords="$("${PYTHON}" -c "
+import sys,os,json
+sys.path.insert(0,os.path.expanduser('~/.claude/scripts'))
+try:
+  from db import extract_keywords
+  d=json.loads(sys.argv[1]) if sys.argv[1].startswith('{') else {}
+  ti=d.get('tool_input',{})
+  text=ti.get('file_path') or ti.get('command','')
+  kws=extract_keywords(text)
+  print(' '.join(kws))
+except: print('')
+" "${input}" 2>/dev/null || echo '')"
+
+            if [ -n "${_mem_keywords}" ]; then
+                _mem_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+                _mem_results="$("${PYTHON}" "${HOME}/.claude/scripts/db.py" search \
+                    "${_mem_keywords}" --project "${_mem_project}" --limit 2 2>/dev/null || echo '[]')"
+
+                _mem_count="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
+import sys,json
+try: print(len(json.load(sys.stdin)))
+except: print(0)
+" 2>/dev/null || echo "0")"
+
+                if [ "${_mem_count}" -gt 0 ]; then
+                    _mem_inject_text="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
+import sys,json
+try:
+  items=json.load(sys.stdin)
+  lines=[]
+  for it in items:
+    c=(it.get('content',''))[:150]
+    d=(it.get('created_at',''))[:10]
+    lines.append(f'[{d}] {c}')
+  print('\n'.join(lines))
+except: print('')
+" 2>/dev/null || echo '')"
+
+                    if [ -n "${_mem_inject_text}" ]; then
+                        _mem_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_mem_inject_text}" 2>/dev/null)"
+                        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":%s}}\n' "${_mem_escaped}"
+
+                        # Update state: record last inject count and file path
+                        "${PYTHON}" -c "
+import json,sys
+f,count,fpath=sys.argv[1],int(sys.argv[2]),sys.argv[3]
+try: d=json.load(open(f))
+except: d={}
+d['mem_last_inject']=count
+files=d.get('mem_injected_files',[])
+if fpath and fpath not in files: files.append(fpath)
+d['mem_injected_files']=files[-20:]
+json.dump(d,open(f,'w'))
+" "${MEM_STATE_FILE}" "${_mem_call_count}" "${_mem_file_path}" 2>/dev/null || true
+                    fi
+                fi
+            fi
+        fi
+    fi
+fi
+# --- end mid-session memory lookup ---
+
+# CONTEXT PRUNER: warn when Read tool re-reads a file already in session context
+if [ "${tool_name}" = "Read" ]; then
+    read_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
+import sys, json, os
+data = {}
+try:
+    data = json.loads(sys.stdin.read())
+except Exception:
+    pass
+path = data.get('tool_input', {}).get('file_path', '')
+if path:
+    path = os.path.expanduser(path)
+    try:
+        path = os.path.abspath(path)
+    except Exception:
+        pass
+print(path)
+" 2>/dev/null || echo '')"
+
+    if [ -n "${read_path}" ]; then
+        READS_FILE="${LOG_DIR}/reads-${PPID}.json"
+        already_read="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo 'no'
+import json
+reads_file = "${READS_FILE}"
+file_path = "${read_path}"
+try:
+    with open(reads_file) as f:
+        state = json.load(f)
+except Exception:
+    state = {"reads": []}
+if file_path in state.get("reads", []):
+    print("yes")
+else:
+    reads = state.get("reads", [])
+    reads.append(file_path)
+    state["reads"] = reads
+    with open(reads_file, "w") as f:
+        json.dump(state, f)
+    print("no")
+PYEOF
+)"
+        if [ "${already_read}" = "yes" ]; then
+            printf '{"additionalContext": "Note: %s was already read this session. Use your existing knowledge of this file unless you have a specific reason to re-read it."}\n' "${read_path}"
+        fi
+    fi
+fi
+
 # LOG
 iso="$(iso_now)"
 printf '[%s] %s %s\n' "${iso}" "${tool_name}" "${input_hash}" >> "${LOG_FILE}" 2>/dev/null || true
