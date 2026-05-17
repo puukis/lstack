@@ -1,6 +1,4 @@
 {
-  "autoUpdatesChannel": "latest",
-  "theme": "auto",
   "hooks": {
     "SessionStart": [
       {
@@ -71,6 +69,11 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "bash C:/Users/Leo/.claude/scripts/statusline.sh"
+  },
+  "spinnerTipsEnabled": true,
   "spinnerVerbs": {
     "mode": "replace",
     "verbs": [
@@ -96,9 +99,7 @@
       "Touching files I shouldn't..."
     ]
   },
-  "spinnerTipsEnabled": true,
   "spinnerTipsOverride": {
-    "mode": "replace",
     "tips": [
       "Run /compact at 60% context - not when forced",
       "Use /planner before writing any code",
@@ -112,15 +113,17 @@
       "context used% > 60 = compact now"
     ]
   },
-  "statusLine": {
-    "type": "command",
-    "command": "wsl bash ~/.claude/scripts/statusline.sh"
-  },
+  "autoUpdatesChannel": "latest",
+  "theme": "auto",
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"],
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
       "scope": "user"
     }
-  }
+  },
+  "effortLevel": "medium"
 }

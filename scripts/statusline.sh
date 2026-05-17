@@ -1,74 +1,66 @@
 #!/usr/bin/env bash
-# Status line script: render a single-line status bar for Claude Code
+# lstack statusline
+# Must: always exit 0, always print exactly one line, complete under 100ms
 
-source "${HOME}/.claude/scripts/os.sh"
+INPUT=$(cat)
+[ -z "$INPUT" ] && printf "lstack" && exit 0
 
-command -v jq >/dev/null 2>&1 || { printf ' lstack'; exit 0; }
-
-input="$(cat)"
-
-model="$(printf '%s' "${input}" | jq -r '.model.display_name // "claude"' 2>/dev/null || echo 'claude')"
-cost="$(printf '%s' "${input}" | jq -r '.cost.total_cost_usd // 0' 2>/dev/null || echo '0')"
-pct="$(printf '%s' "${input}" | jq -r '.context_window.used_percentage // 0' 2>/dev/null || echo '0')"
-branch="$(printf '%s' "${input}" | jq -r '.workspace.git_worktree // ""' 2>/dev/null || echo '')"
-added="$(printf '%s' "${input}" | jq -r '.cost.total_lines_added // 0' 2>/dev/null || echo '0')"
-removed="$(printf '%s' "${input}" | jq -r '.cost.total_lines_removed // 0' 2>/dev/null || echo '0')"
-
-# Format cost to 3 decimal places
-cost_fmt="$("${PYTHON}" -c "print(f'{float(\"${cost}\"):.3f}')" 2>/dev/null || printf '%.3f' "${cost}")"
-
-# Integer percentage
-pct_int="${pct%%.*}"
-pct_int="${pct_int:-0}"
-
-# Windows fallback — plain text, no ANSI
-if [ "$OS" = "windows" ]; then
-    printf ' %s | %s%% | $%s\n' "${model}" "${pct_int}" "${cost_fmt}"
-    exit 0
-fi
-
-# ANSI codes
-RESET='\033[0m'
-BOLD='\033[1m'
-DIM='\033[2m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-RED='\033[31m'
-
-# Build 10-char context bar
-bar=""
-filled=$(( pct_int * 10 / 100 ))
-[ "${filled}" -gt 10 ] && filled=10
-empty=$(( 10 - filled ))
-
-i=0
-while [ "${i}" -lt "${filled}" ]; do
-    bar="${bar}█"
-    i=$(( i + 1 ))
-done
-i=0
-while [ "${i}" -lt "${empty}" ]; do
-    bar="${bar}░"
-    i=$(( i + 1 ))
-done
-
-# Bar color based on percentage
-if [ "${pct_int}" -ge 80 ] 2>/dev/null; then
-    bar_color="${RED}"
-elif [ "${pct_int}" -ge 60 ] 2>/dev/null; then
-    bar_color="${YELLOW}"
+# Parse with jq (fast) or python3 fallback (one subprocess call total)
+if command -v jq >/dev/null 2>&1; then
+  MODEL=$(echo "$INPUT" | jq -r '.model.display_name // "?"' 2>/dev/null)
+  PCT=$(echo "$INPUT"   | jq -r '.context_window.used_percentage // 0' 2>/dev/null | cut -d. -f1)
+  COST=$(echo "$INPUT"  | jq -r '.cost.total_cost_usd // 0' 2>/dev/null | awk '{printf "%.3f",$1}')
+  ADD=$(echo "$INPUT"   | jq -r '.cost.total_lines_added // 0' 2>/dev/null)
+  DEL=$(echo "$INPUT"   | jq -r '.cost.total_lines_removed // 0' 2>/dev/null)
 else
-    bar_color="${GREEN}"
+  PARSED=$(echo "$INPUT" | python3 -c "
+import sys,json
+try:
+  d=json.load(sys.stdin)
+  m=d.get('model',{}).get('display_name','?')
+  p=int(float(d.get('context_window',{}).get('used_percentage',0)))
+  c=float(d.get('cost',{}).get('total_cost_usd',0))
+  a=int(d.get('cost',{}).get('total_lines_added',0))
+  r=int(d.get('cost',{}).get('total_lines_removed',0))
+  print(f'{m}|{p}|{c:.3f}|{a}|{r}')
+except:
+  print('?|0|0.000|0|0')
+" 2>/dev/null || echo "?|0|0.000|0|0")
+  MODEL=$(echo "$PARSED" | cut -d'|' -f1)
+  PCT=$(echo "$PARSED"   | cut -d'|' -f2)
+  COST=$(echo "$PARSED"  | cut -d'|' -f3)
+  ADD=$(echo "$PARSED"   | cut -d'|' -f4)
+  DEL=$(echo "$PARSED"   | cut -d'|' -f5)
 fi
 
-# Build output line
-line="${BOLD}${model}${RESET}"
+# Defaults if parsing produced empty strings
+MODEL=${MODEL:-"?"}
+PCT=${PCT:-0}
+COST=${COST:-"0.000"}
+ADD=${ADD:-0}
+DEL=${DEL:-0}
 
-if [ -n "${branch}" ]; then
-    line="${line} on ${branch}"
-fi
+# Git branch (local only, fast)
+BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
-line="${line}  ${bar_color}${bar}${RESET} ${pct_int}%  ${DIM}\$${cost_fmt}  +${added} -${removed}${RESET}"
+# Context bar (10 chars)
+FILLED=$(( PCT / 10 )) 2>/dev/null || FILLED=0
+BAR="" i=1
+while [ $i -le 10 ]; do
+  if [ "$i" -le "$FILLED" ]; then BAR="${BAR}█"; else BAR="${BAR}░"; fi
+  i=$((i+1))
+done
 
-printf '%b\n' "${line}"
+# Colors — use $'...' so real ESC bytes are assigned (not literal \033 text)
+if [ "$PCT" -ge 80 ] 2>/dev/null; then C=$'\033[31m'
+elif [ "$PCT" -ge 60 ] 2>/dev/null; then C=$'\033[33m'
+else C=$'\033[32m'; fi
+B=$'\033[1m'; D=$'\033[2m'; R=$'\033[0m'
+
+# Branch segment
+[ -n "$BRANCH" ] && BS=" ${D}on${R} ${BRANCH}" || BS=""
+
+printf "${B}%s${R}%s  ${C}%s %s%%${R}  ${D}\$%s  +%s -%s${R}\n" \
+  "$MODEL" "$BS" "$BAR" "$PCT" "$COST" "$ADD" "$DEL"
+
 exit 0
