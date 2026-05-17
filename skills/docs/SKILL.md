@@ -1,3 +1,10 @@
+---
+name: docs
+description: Writes accurate documentation by reading source first — never invents API signatures
+allowed-tools: Read, Write, Edit, Glob, Grep
+disable-model-invocation: false
+---
+
 # Docs — writes accurate documentation
 
 ## Activation

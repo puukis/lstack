@@ -1,3 +1,10 @@
+---
+name: engineer
+description: Writes production-ready code — reads patterns first, runs tests after, no gold-plating
+allowed-tools: Read, Write, Edit, MultiEdit, Bash, Glob, Grep
+disable-model-invocation: false
+---
+
 # Engineer — writes production-ready code
 
 ## Activation

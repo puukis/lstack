@@ -1,3 +1,10 @@
+---
+name: debug
+description: Systematic root cause analysis — reproduce, isolate, hypothesize, verify before any fix
+allowed-tools: Read, Bash, Glob, Grep
+disable-model-invocation: false
+---
+
 # Debug — systematic root cause analysis
 
 ## Activation

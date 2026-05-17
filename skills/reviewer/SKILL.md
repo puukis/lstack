@@ -1,3 +1,10 @@
+---
+name: reviewer
+description: Code review producing only numbered actionable findings — no rewrites, no praise
+allowed-tools: Read, Bash, Glob, Grep
+disable-model-invocation: false
+---
+
 # Reviewer — code review; no rewrites
 
 ## Activation

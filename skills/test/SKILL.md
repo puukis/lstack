@@ -1,3 +1,10 @@
+---
+name: test
+description: Writes tests only — reads source and existing tests first, never touches source files
+allowed-tools: Read, Write, Edit, MultiEdit, Bash, Glob, Grep
+disable-model-invocation: false
+---
+
 # Test — writes tests; never touches source
 
 ## Activation

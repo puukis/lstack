@@ -1,3 +1,10 @@
+---
+name: planner
+description: Structured task breakdown with clarifying questions before planning — no code written
+allowed-tools: Read, Glob, Grep
+disable-model-invocation: false
+---
+
 # Planner — creates structured task breakdowns
 
 ## Activation

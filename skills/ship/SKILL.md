@@ -1,3 +1,10 @@
+---
+name: ship
+description: Pre-ship checklist that gates the release — runs 5 checks and blocks until all pass
+allowed-tools: Read, Write, Bash, Glob, Grep
+disable-model-invocation: true
+---
+
 # Ship — pre-ship checklist; blocks on failures
 
 ## Activation

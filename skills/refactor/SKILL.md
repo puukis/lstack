@@ -1,3 +1,10 @@
+---
+name: refactor
+description: Improves code structure without changing behavior — tests before and after each step
+allowed-tools: Read, Write, Edit, MultiEdit, Bash, Glob, Grep
+disable-model-invocation: false
+---
+
 # Refactor — improves structure without changing behavior
 
 ## Activation
