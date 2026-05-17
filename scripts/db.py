@@ -21,6 +21,18 @@ STOPWORDS = {
 }
 
 
+def normalize_project(path):
+    """Return a stable, cross-platform project path for DB storage."""
+    if not path:
+        return path
+    # Convert git-bash style /c/Users/... -> C:/Users/...
+    m = re.match(r'^/([a-zA-Z])/(.*)', path)
+    if m:
+        return f"{m.group(1).upper()}:/{m.group(2)}"
+    # Normalize backslashes to forward slashes
+    return path.replace('\\', '/')
+
+
 def iso_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -50,9 +62,9 @@ def get_project(cwd=None):
             ["git", "rev-parse", "--show-toplevel"],
             cwd=path, stderr=subprocess.DEVNULL
         ).decode().strip()
-        return os.path.realpath(root)
+        return normalize_project(os.path.realpath(root))
     except Exception:
-        return os.path.realpath(path)
+        return normalize_project(os.path.realpath(path))
 
 
 def connect():
@@ -137,7 +149,7 @@ def cmd_init(args):
 
 def cmd_session_start(args):
     session_id = args.session_id
-    project = os.path.realpath(args.project) if args.project else get_project()
+    project = normalize_project(args.project) if args.project else normalize_project(get_project())
 
     con = connect()
     init_db(con)
@@ -194,7 +206,7 @@ def cmd_session_end(args):
 
 def cmd_observe(args):
     session_id = args.session_id
-    project = os.path.realpath(args.project) if args.project else get_project()
+    project = normalize_project(args.project) if args.project else normalize_project(get_project())
     content = args.content
     tags = args.tags or ""
 
@@ -284,7 +296,7 @@ def cmd_search(args):
 
 
 def cmd_stats(args):
-    project = get_project()
+    project = normalize_project(get_project())
 
     con = connect()
     init_db(con)

@@ -43,3 +43,18 @@ sed_inplace() {
 iso_now() {
   "${PYTHON}" -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))"
 }
+
+# Convert POSIX path to Windows-native path for Windows Python
+to_native_path() {
+    if [ "${OS}" = "windows" ]; then
+        cygpath -w "$1" 2>/dev/null || echo "$1"
+    else
+        echo "$1"
+    fi
+}
+
+# Pre-compute native path to db.py (used by all hooks)
+DB_PY="$("${PYTHON}" -c "
+import pathlib
+print(str(pathlib.Path.home() / '.claude' / 'scripts' / 'db.py'))
+" 2>/dev/null || echo "${HOME}/.claude/scripts/db.py")"

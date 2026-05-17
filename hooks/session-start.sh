@@ -65,12 +65,19 @@ ${git_context}"
 fi
 
 # --- lstack persistent memory --- (db.py session-start)
-SESSION_ID="${CLAUDE_SESSION_ID:-$(${PYTHON} -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")}"
-_db_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-_db_project="$(realpath "${_db_project}" 2>/dev/null || echo "${_db_project}")"
+SESSION_ID="${CLAUDE_SESSION_ID:-$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")}"
+_db_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+_db_project="$("${PYTHON}" -c "
+import sys, re
+p = sys.argv[1]
+m = re.match(r'^/([a-zA-Z])/(.*)', p)
+print(f'{m.group(1).upper()}:/{m.group(2)}' if m else p)
+" "${_db_project_raw}" 2>/dev/null || echo "${_db_project_raw}")"
+# Normalize to forward slashes to match stored format
+_db_project="${_db_project//\\//}"
 
-_db_result="$(${PYTHON} "${HOME}/.claude/scripts/db.py" session-start "${SESSION_ID}" "${_db_project}" 2>/dev/null || true)"
-_db_context="$(printf '%s' "${_db_result}" | ${PYTHON} -c "
+_db_result="$("${PYTHON}" "${DB_PY}" session-start "${SESSION_ID}" "${_db_project}" 2>/dev/null || true)"
+_db_context="$(printf '%s' "${_db_result}" | "${PYTHON}" -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
