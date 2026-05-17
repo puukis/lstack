@@ -11,13 +11,19 @@ usage() {
 lstack ${VERSION} — Claude Code personal environment
 
 Commands:
-  init      Scaffold .claude/ in current project directory
-  settings  Regenerate settings.json for the current OS
-  memory    Open project or global MEMORY.md in \$EDITOR
-  logs      Tail tool-calls.log with color
-  status    Show hook health, memory sizes, session/compaction timestamps
-  clean     Prune logs >30 days; remove loop state for dead PIDs
-  help      Show this message
+  init              Scaffold .claude/ in current project directory
+  settings          Regenerate settings.json for the current OS
+  memory            Open project or global MEMORY.md in \$EDITOR
+  memory stats      Show persistent DB stats
+  memory prune [--days N]  Delete observations older than N days (default 90)
+  search [query]    Search persistent memory for [query]
+  logs              Tail tool-calls.log with color
+  status            Show hook health, memory sizes, session/compaction timestamps
+  clean             Prune logs >30 days; remove loop/reads state for dead PIDs
+  dashboard         Live display of parallel agent worktrees
+  upgrade           Pull latest lstack from git origin
+  publish           Package lstack for open-source sharing
+  help              Show this message
 EOF
 }
 
@@ -123,20 +129,74 @@ MEMEOF
 }
 
 cmd_memory() {
-    local editor="${EDITOR:-nano}"
-    local target
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
 
-    # Check for project memory first
-    git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-    if [ -n "${git_root}" ] && [ -f "${git_root}/.claude/memory/MEMORY.md" ]; then
-        target="${git_root}/.claude/memory/MEMORY.md"
-        echo "Opening project memory: ${target}"
-    else
-        target="${CLAUDE_DIR}/memory/MEMORY.md"
-        echo "Opening global memory: ${target}"
+    case "${subcmd}" in
+        stats)
+            source "${CLAUDE_DIR}/scripts/os.sh"
+            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" stats
+            ;;
+        prune)
+            source "${CLAUDE_DIR}/scripts/os.sh"
+            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" prune "$@"
+            ;;
+        "")
+            local editor="${EDITOR:-nano}"
+            local target
+            git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+            if [ -n "${git_root}" ] && [ -f "${git_root}/.claude/memory/MEMORY.md" ]; then
+                target="${git_root}/.claude/memory/MEMORY.md"
+                echo "Opening project memory: ${target}"
+            else
+                target="${CLAUDE_DIR}/memory/MEMORY.md"
+                echo "Opening global memory: ${target}"
+            fi
+            "${editor}" "${target}"
+            ;;
+        *)
+            echo "Unknown memory subcommand: ${subcmd}"
+            echo "Usage: lstack memory [stats|prune [--days N]]"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_search() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local query="$*"
+    if [ -z "${query}" ]; then
+        echo "Usage: lstack search [query]"
+        exit 1
     fi
 
-    "${editor}" "${target}"
+    results="$("${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" search "${query}" --limit 5 2>/dev/null)"
+
+    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try: print(len(json.load(sys.stdin)))
+except: print(0)
+" 2>/dev/null || echo "0")"
+
+    if [ "${count}" -eq 0 ]; then
+        echo "No results for '${query}'"
+        exit 0
+    fi
+
+    printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try:
+    items=json.load(sys.stdin)
+    for i,it in enumerate(items,1):
+        content=it.get('content','')
+        date=(it.get('created_at',''))[:10]
+        tags=it.get('tags','')
+        print(f'[{i}] {date}  {content}')
+        if tags:
+            print(f'     tags: {tags}')
+except Exception as e:
+    print(f'Error: {e}')
+"
 }
 
 cmd_logs() {
@@ -261,7 +321,189 @@ cmd_clean() {
     done
     echo "  Removed ${dead_count} loop state file(s) for dead PIDs"
 
+    # Remove reads state files for dead PIDs
+    reads_count=0
+    for f in "${log_dir}"/reads-*.json; do
+        [ -f "${f}" ] || continue
+        pid="$(basename "${f}" | sed 's/reads-//;s/\.json//')"
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            rm -f "${f}"
+            reads_count=$(( reads_count + 1 ))
+        fi
+    done
+    echo "  Removed ${reads_count} reads state file(s) for dead PIDs"
+
+    # Prune persistent DB observations older than 90 days
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    if [ -n "${PYTHON}" ]; then
+        db_prune_out="$("${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" prune --days 90 2>/dev/null || echo "  (db.py not available)")"
+        echo "  ${db_prune_out}"
+    fi
+
     echo "Done."
+}
+
+cmd_dashboard() {
+    exec bash "${CLAUDE_DIR}/scripts/dashboard.sh"
+}
+
+cmd_upgrade() {
+    local git_dir="${CLAUDE_DIR}/.git"
+    local git_source="${CLAUDE_DIR}/.git-source"
+
+    if [ ! -d "${git_dir}" ]; then
+        cat <<EOF
+lstack was not installed via git. Cannot auto-upgrade.
+To enable upgrades: git init ~/.claude && git remote add origin [your-repo-url]
+EOF
+        exit 1
+    fi
+
+    if ! git -C "${CLAUDE_DIR}" remote get-url origin >/dev/null 2>&1; then
+        echo "No 'origin' remote configured."
+        echo "Add one with: git -C ~/.claude remote add origin [url]"
+        exit 1
+    fi
+
+    # Write .git-source if not present
+    if [ ! -f "${git_source}" ]; then
+        git -C "${CLAUDE_DIR}" remote get-url origin > "${git_source}" 2>/dev/null || true
+    fi
+
+    git -C "${CLAUDE_DIR}" fetch origin
+
+    local local_sha remote_sha
+    local_sha="$(git -C "${CLAUDE_DIR}" rev-parse HEAD 2>/dev/null)"
+    remote_sha="$(git -C "${CLAUDE_DIR}" rev-parse origin/main 2>/dev/null)"
+
+    if [ "${local_sha}" = "${remote_sha}" ]; then
+        echo "Already up to date."
+        exit 0
+    fi
+
+    local local_short="${local_sha:0:7}"
+    local remote_short="${remote_sha:0:7}"
+    echo "Updating lstack: ${local_short} -> ${remote_short}"
+
+    git -C "${CLAUDE_DIR}" pull --ff-only origin main
+
+    echo "Updated. Changes:"
+    git -C "${CLAUDE_DIR}" log --oneline "${local_sha}..${remote_sha}"
+    echo ""
+    echo "Restart Claude Code to apply changes."
+}
+
+cmd_publish() {
+    local timestamp
+    timestamp="$(date -u '+%Y%m%dT%H%M%S' 2>/dev/null || echo 'now')"
+    local staging="/tmp/lstack-publish-${timestamp}"
+
+    echo "Creating staging directory: ${staging}"
+    mkdir -p "${staging}/skills" "${staging}/hooks" "${staging}/scripts" "${staging}/bin"
+
+    # Explicit copies — no wildcards that could grab sensitive files
+    [ -f "${CLAUDE_DIR}/CLAUDE.md" ] && cp "${CLAUDE_DIR}/CLAUDE.md" "${staging}/CLAUDE.md"
+
+    for f in "${CLAUDE_DIR}/skills/"*.md; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/skills/"
+    done
+    for f in "${CLAUDE_DIR}/hooks/"*.sh; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/hooks/"
+    done
+    for f in "${CLAUDE_DIR}/scripts/"*.sh; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/scripts/"
+    done
+    [ -f "${CLAUDE_DIR}/bin/lstack" ] && cp "${CLAUDE_DIR}/bin/lstack" "${staging}/bin/lstack"
+
+    # Generate settings.json.example — replace absolute HOME paths with ./
+    if [ -f "${CLAUDE_DIR}/settings.json" ]; then
+        python3 - "${CLAUDE_DIR}/settings.json" "${staging}/settings.json.example" <<'PYEOF' 2>/dev/null || true
+import sys, json, re, os
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    raw = f.read()
+home = os.path.expanduser('~').replace('\\', '/')
+# Replace absolute ~/.claude/... paths with relative ./...
+raw = re.sub(re.escape(home) + r'[/\\]\.claude[/\\]', './', raw)
+raw = re.sub(re.escape(home.replace('/', '\\')) + r'[/\\]\.claude[/\\]', './', raw)
+# Remove personal email/name fields
+data = json.loads(raw)
+with open(dst, 'w') as f:
+    json.dump(data, f, indent=2)
+PYEOF
+    fi
+
+    # Generate README.md in staging
+    cat > "${staging}/README.md" <<'READMEEOF'
+# lstack
+
+A personal Claude Code engineering environment — hooks, skills, and CLI tooling
+that extend Claude Code with memory, safety gates, git-aware context, and
+structured workflows.
+
+## Directory structure
+
+```
+~/.claude/
+├── CLAUDE.md          # Global identity + rules (loaded every session)
+├── bin/lstack         # CLI: init, status, clean, upgrade, publish, dashboard
+├── hooks/             # Claude Code lifecycle hooks
+│   ├── session-start.sh   # Load memory + git context
+│   ├── pre-tool.sh        # Loop detection, bash safety gates, read deduplication
+│   ├── post-tool.sh       # Auto-formatter on file writes
+│   ├── pre-compact.sh     # Save handover summary before compaction
+│   └── stop.sh            # Run tests; auto-extract session learnings
+├── scripts/           # Shared utilities
+│   ├── os.sh              # Portable OS detection + helper functions
+│   └── dashboard.sh       # Live parallel-agent status display
+├── skills/            # On-demand skill prompts (invoked via /skillname)
+│   ├── engineer.md, planner.md, reviewer.md, refactor.md
+│   ├── test.md, debug.md, ship.md, docs.md
+│   ├── architect.md, security.md, parallel.md, build.md
+└── memory/            # Persistent memory files (auto-updated by Claude)
+```
+
+## Installation
+
+```bash
+git clone <repo-url> ~/.claude
+chmod +x ~/.claude/bin/lstack ~/.claude/hooks/*.sh ~/.claude/scripts/*.sh
+~/.claude/bin/lstack init   # scaffold a project
+```
+
+## Skills
+
+| Skill | Description |
+|-------|-------------|
+| /engineer  | Write production code; read patterns first; run tests after |
+| /planner   | Structured task breakdown; clarify before planning |
+| /reviewer  | Numbered findings: [N] [SEVERITY] [file:line] — [issue] |
+| /refactor  | Improve structure; tests before and after |
+| /test      | Write tests only; never touch source |
+| /debug     | reproduce → isolate → hypothesize → verify → root cause |
+| /ship      | Pre-ship checklist: tests, secrets, env vars, changelog |
+| /docs      | Read source before writing; never invent API signatures |
+| /architect | Design system before coding; outputs ADRs + ARCHITECTURE.md |
+| /security  | Security audit; actionable findings only |
+| /parallel  | Spawn up to 3 isolated sub-agents in git worktrees |
+| /build     | Plan → approve → implement with hard gate between phases |
+
+## Hooks overview
+
+Hooks in `settings.json` enforce rules deterministically:
+- **SessionStart** — loads global + project memory, injects git context
+- **PreToolUse** — loop detection, bash safety gates, read deduplication
+- **PostToolUse** — auto-formats on Write/Edit
+- **PreCompact** — saves handover summary before context compaction
+- **Stop** — runs project test command; extracts learnings on success
+READMEEOF
+
+    echo ""
+    echo "Staging: ${staging}"
+    echo ""
+    echo "Run:"
+    echo "  cp -r ${staging} <destination>"
+    echo "  # or push directly with git"
 }
 
 cmd_settings() {
@@ -277,12 +519,16 @@ cmd="${1:-help}"
 shift 2>/dev/null || true
 
 case "${cmd}" in
-    init)     cmd_init "$@" ;;
-    settings) cmd_settings "$@" ;;
-    memory)   cmd_memory "$@" ;;
-    logs)     cmd_logs "$@" ;;
-    status)   cmd_status "$@" ;;
-    clean)    cmd_clean "$@" ;;
+    init)      cmd_init "$@" ;;
+    settings)  cmd_settings "$@" ;;
+    memory)    cmd_memory "$@" ;;
+    search)    cmd_search "$@" ;;
+    logs)      cmd_logs "$@" ;;
+    status)    cmd_status "$@" ;;
+    clean)     cmd_clean "$@" ;;
+    dashboard) cmd_dashboard "$@" ;;
+    upgrade)   cmd_upgrade "$@" ;;
+    publish)   cmd_publish "$@" ;;
     help|--help|-h) usage ;;
     *)
         echo "Unknown command: ${cmd}"
