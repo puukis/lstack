@@ -107,7 +107,7 @@ import sys, json
 content = sys.stdin.read()
 print(json.dumps(content))
 " 2>/dev/null || echo '""')"
-    printf '{"additionalContext": %s}\n' "${escaped}"
+    printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": %s}}\n' "${escaped}"
 fi
 
 # Log session start
