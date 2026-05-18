@@ -7,41 +7,65 @@ bash safety gates, auto-formatting, memory management, and session logging.
 
 - **macOS**: native bash, all features supported
 - **Linux**: native bash, all features supported
-- **Windows**: requires WSL2 with bash. Run `lstack settings` after install
-  to regenerate settings.json with WSL-wrapped commands. The statusline
-  falls back to plain text (no ANSI colors) on Windows terminals.
+- **Windows**: Git Bash (bundled with Git for Windows). Run `lstack settings`
+  after install to regenerate settings.json with correct Windows paths. The
+  statusline falls back to plain text (no ANSI colors) on Windows terminals.
 
 ## Install
 
+### One-liner (macOS / Linux)
+
 ```bash
-# macOS / Linux
-git clone https://github.com/puukis/lstack ~/.claude
-chmod +x ~/.claude/bin/lstack ~/.claude/hooks/*.sh ~/.claude/scripts/*.sh
-bash ~/.claude/bin/lstack init
+curl -fsSL https://raw.githubusercontent.com/puukis/lstack/main/install.sh | bash
 ```
 
-## Windows install
+### Manual
 
-1. Install WSL2 and confirm bash is available: `wsl bash --version`
-2. Clone into WSL home: `wsl git clone https://github.com/puukis/lstack ~/.claude`
-3. In Claude Code on Windows, run: `wsl bash ~/.claude/bin/lstack init`
-4. Run: `wsl bash ~/.claude/bin/lstack settings`
-   This writes `C:\Users\<you>\.claude\settings.json` with WSL-wrapped commands.
+```bash
+git clone https://github.com/puukis/lstack /tmp/lstack
+bash /tmp/lstack/install.sh
+```
 
-> **Note:** Inside WSL, `~/.claude` maps to the Linux home directory, not
-> `C:\Users\<you>\.claude`. The `wsl`-wrapped hook commands in settings.json
-> reach into WSL's filesystem automatically.
+### Windows (Git Bash)
+
+```bash
+git clone https://github.com/puukis/lstack /tmp/lstack
+bash /tmp/lstack/install.sh
+# When prompted, run: lstack settings
+# This regenerates settings.json with correct Windows paths
+```
+
+### Upgrading
+
+```bash
+lstack upgrade    # pulls latest from git and regenerates settings
+```
+
+### Existing ~/.claude setup
+
+The installer detects an existing `~/.claude` directory and creates a
+timestamped backup before installing. Your personal memory files
+(`preferences.md`, `patterns.md`, `lstack.db`) are never overwritten.
+
+### After install
+
+1. Restart Claude Code
+2. In any project: `lstack init`
+3. Verify: `lstack doctor`
 
 ## Commands
 
-| Command           | Description                                     |
-|-------------------|-------------------------------------------------|
-| `lstack init`     | Scaffold `.claude/` in current project          |
-| `lstack settings` | Regenerate settings.json for the current OS     |
-| `lstack memory`   | Open project or global MEMORY.md in `$EDITOR`  |
-| `lstack logs`     | Tail tool-calls.log with color                  |
-| `lstack status`   | Hook health, memory sizes, session timestamps   |
-| `lstack clean`    | Prune logs >30 days; remove dead loop state     |
+| Command              | Description                                     |
+|----------------------|-------------------------------------------------|
+| `lstack init`        | Scaffold `.claude/` in current project          |
+| `lstack settings`    | Regenerate settings.json for the current OS     |
+| `lstack doctor`      | Diagnose installation health                    |
+| `lstack onboard`     | Interactive first-run setup                     |
+| `lstack memory`      | Open project or global MEMORY.md in `$EDITOR`  |
+| `lstack logs`        | Tail tool-calls.log with color                  |
+| `lstack status`      | Hook health, memory sizes, session timestamps   |
+| `lstack clean`       | Prune logs >30 days; remove dead loop state     |
+| `lstack upgrade`     | Pull latest lstack from git origin              |
 
 ## Hooks
 

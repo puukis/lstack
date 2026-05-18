@@ -13,6 +13,8 @@ lstack ${VERSION} — Claude Code personal environment
 Commands:
   init              Scaffold .claude/ in current project directory
   settings          Regenerate settings.json for the current OS
+  doctor            Diagnose installation health
+  onboard           Interactive first-run setup
   memory            Open project or global MEMORY.md in \$EDITOR
   memory stats      Show persistent DB stats
   memory prune [--days N]  Delete observations older than N days (default 90)
@@ -506,6 +508,239 @@ READMEEOF
     echo "  # or push directly with git"
 }
 
+cmd_doctor() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local failures=0
+
+    _check_pass() { printf '  [\033[32m✓\033[0m] %s\n' "$1"; }
+    _check_fail() { printf '  [\033[31m✗\033[0m] %s\n' "$1"; failures=$(( failures + 1 )); }
+
+    # CLAUDE.md present and under 80 lines
+    if [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
+        local _lines
+        _lines="$(wc -l < "${CLAUDE_DIR}/CLAUDE.md" | tr -d ' ')"
+        if [ "${_lines}" -le 80 ]; then
+            _check_pass "CLAUDE.md present and under 80 lines (${_lines} lines)"
+        else
+            _check_fail "CLAUDE.md is ${_lines} lines (over 80) — edit and trim: \$EDITOR ~/.claude/CLAUDE.md"
+        fi
+    else
+        _check_fail "CLAUDE.md missing — run: lstack settings"
+    fi
+
+    # settings.json valid JSON (use $PYTHON from os.sh — avoids broken Windows stub)
+    if [ -f "${CLAUDE_DIR}/settings.json" ] && [ -n "${PYTHON}" ] && \
+       "${PYTHON}" -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
+        _check_pass "settings.json valid JSON"
+    else
+        _check_fail "settings.json invalid or missing — run: lstack settings"
+    fi
+
+    # All 5 hooks exist and are executable
+    local _hooks_ok=true
+    for _hook in session-start pre-tool post-tool pre-compact stop; do
+        local _hf="${CLAUDE_DIR}/hooks/${_hook}.sh"
+        if [ ! -f "${_hf}" ] || [ ! -x "${_hf}" ]; then
+            _hooks_ok=false
+            break
+        fi
+    done
+    if [ "${_hooks_ok}" = true ]; then
+        _check_pass "All 5 hooks exist and are executable"
+    else
+        _check_fail "One or more hooks missing or not executable — run: chmod +x ~/.claude/hooks/*.sh"
+    fi
+
+    # Python 3 (sourced from os.sh)
+    if [ -n "${PYTHON}" ]; then
+        _check_pass "Python 3 found at: ${PYTHON}"
+    else
+        _check_fail "Python 3 not found — install python3 (https://python.org)"
+    fi
+
+    # DB initialized and accessible
+    local _db="${CLAUDE_DIR}/memory/lstack.db"
+    if [ -f "${_db}" ]; then
+        if [ -n "${PYTHON}" ]; then
+            local _stats
+            _stats="$("${PYTHON}" "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || true)"
+            if [ -n "${_stats}" ]; then
+                _check_pass "DB accessible: ${_stats}"
+            else
+                _check_pass "DB initialized at ~/.claude/memory/lstack.db"
+            fi
+        else
+            _check_pass "DB initialized at ~/.claude/memory/lstack.db"
+        fi
+    else
+        _check_fail "DB not initialized — run: python3 ~/.claude/scripts/db.py init"
+    fi
+
+    # session-start.sh CLAUDE_HOME check
+    if [ -f "${CLAUDE_DIR}/hooks/session-start.sh" ]; then
+        if grep -q 'CLAUDE_HOME\|CLAUDE_DIR\|\.claude' "${CLAUDE_DIR}/hooks/session-start.sh" 2>/dev/null; then
+            _check_pass "session-start.sh references CLAUDE_HOME/CLAUDE_DIR"
+        else
+            _check_fail "session-start.sh: may be missing CLAUDE_HOME reference — run: lstack settings"
+        fi
+    fi
+
+    # git remote configured for upgrade
+    if [ -d "${CLAUDE_DIR}/.git" ] && git -C "${CLAUDE_DIR}" remote get-url origin >/dev/null 2>&1; then
+        local _remote
+        _remote="$(git -C "${CLAUDE_DIR}" remote get-url origin 2>/dev/null)"
+        _check_pass "lstack upgrade available (remote: ${_remote})"
+    else
+        _check_fail "No git remote — upgrade disabled. Run: git -C ~/.claude remote add origin https://github.com/puukis/lstack"
+    fi
+
+    # Context7 MCP in settings.json
+    if [ -f "${CLAUDE_DIR}/settings.json" ] && grep -q 'context7' "${CLAUDE_DIR}/settings.json" 2>/dev/null; then
+        _check_pass "Context7 MCP configured in settings.json"
+    else
+        _check_fail "Context7 MCP not found in settings.json — run: lstack settings"
+    fi
+
+    # statusline script present and executable
+    local _sl_sh="${CLAUDE_DIR}/scripts/statusline.sh"
+    local _sl_py="${CLAUDE_DIR}/scripts/statusline.py"
+    if ( [ -f "${_sl_sh}" ] && [ -x "${_sl_sh}" ] ) || [ -f "${_sl_py}" ]; then
+        _check_pass "statusline script present"
+    else
+        _check_fail "statusline script not executable — run: chmod +x ~/.claude/scripts/statusline.sh"
+    fi
+
+    printf '\n'
+    if [ "${failures}" -eq 0 ]; then
+        printf 'lstack is healthy.\n'
+    else
+        printf '\033[33m%d check(s) failed.\033[0m Run the fix commands above, then restart Claude Code.\n' "${failures}"
+    fi
+}
+
+cmd_onboard() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    printf 'Setting up your lstack environment...\n'
+    printf '\n'
+
+    # Step A — name/preferences (skip if preferences.md already has content)
+    local _prefs="${CLAUDE_DIR}/memory/preferences.md"
+    local _has_prefs=false
+    if [ -f "${_prefs}" ]; then
+        local _pref_content
+        _pref_content="$(grep -v '^#' "${_prefs}" | grep -v '^$' | head -1 || true)"
+        [ -n "${_pref_content}" ] && _has_prefs=true
+    fi
+
+    if [ "${_has_prefs}" = false ]; then
+        printf 'What'\''s your name? (used in CLAUDE.md identity) '
+        read -r _name
+        printf 'Primary coding language(s)? (e.g. TypeScript, Python, Go) '
+        read -r _langs
+        printf 'Preferred verbosity? [1=minimal 2=normal 3=detailed] '
+        read -r _verbosity
+
+        local _verb_label='normal'
+        case "${_verbosity}" in
+            1) _verb_label='minimal' ;;
+            3) _verb_label='detailed' ;;
+        esac
+
+        cat > "${_prefs}" <<PREFEOF
+# Preferences
+# Updated by lstack onboard
+
+Name: ${_name}
+Languages: ${_langs}
+Verbosity: ${_verb_label}
+PREFEOF
+        printf 'Preferences saved to ~/.claude/memory/preferences.md\n'
+    else
+        _name="$(grep '^Name:' "${_prefs}" 2>/dev/null | sed 's/^Name: *//' | head -1 || true)"
+        printf 'Preferences already configured (skipping). To reconfigure: edit ~/.claude/memory/preferences.md\n'
+    fi
+
+    # Step B — update CLAUDE.md identity line with name
+    if [ -n "${_name:-}" ] && [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
+        if ! grep -q "${_name}" "${CLAUDE_DIR}/CLAUDE.md" 2>/dev/null; then
+            # Replace the Owner: line if present, else leave as-is
+            if grep -q '^Model:' "${CLAUDE_DIR}/CLAUDE.md" 2>/dev/null; then
+                # Insert name line after the Model: line
+                local _tmpf
+                _tmpf="$(mktemp)"
+                awk -v name="${_name}" '
+                    /^Model:/ { print; print "Name:  " name; next }
+                    { print }
+                ' "${CLAUDE_DIR}/CLAUDE.md" > "${_tmpf}"
+                mv "${_tmpf}" "${CLAUDE_DIR}/CLAUDE.md"
+                printf 'Added your name to CLAUDE.md identity section.\n'
+            fi
+        fi
+    fi
+
+    # Step C — PATH suggestion
+    local _bin="${CLAUDE_DIR}/bin"
+    case ":${PATH}:" in
+        *":${_bin}:"*) ;; # already in PATH
+        *)
+            printf '\n'
+            printf 'Add lstack to your PATH by adding this to your shell config:\n'
+            printf '\n'
+            local _shell_name
+            _shell_name="$(basename "${SHELL:-bash}")"
+            case "${_shell_name}" in
+                fish)
+                    printf '  fish_add_path ~/.claude/bin\n'
+                    printf '\n'
+                    printf 'Then restart your terminal or run: source ~/.config/fish/config.fish\n'
+                    ;;
+                *)
+                    printf '  export PATH="$HOME/.claude/bin:$PATH"\n'
+                    printf '\n'
+                    local _rc=".bashrc"
+                    [ "${_shell_name}" = "zsh" ] && _rc=".zshrc"
+                    printf 'Then restart your terminal or run: source ~/%s\n' "${_rc}"
+                    ;;
+            esac
+            ;;
+    esac
+
+    # Step D — Windows-specific check
+    case "${OS}" in
+        windows)
+            printf '\n'
+            printf 'Windows detected. Verifying hook paths in settings.json...\n'
+            if [ -n "${PYTHON}" ]; then
+                "${PYTHON}" "${DB_PY}" init 2>/dev/null || true
+                printf 'Python works: %s\n' "${PYTHON}"
+            fi
+            printf 'Hooks use Git Bash paths (C:/Users/...). Verify in: ~/.claude/settings.json\n'
+            printf 'If hooks don'\''t fire, run: lstack settings\n'
+            ;;
+    esac
+
+    # Step E — summary
+    printf '\n'
+    printf 'Onboarding complete. Your setup:\n'
+    local _skill_count=0
+    if ls "${CLAUDE_DIR}/skills/"*.md >/dev/null 2>&1; then
+        _skill_count="$(ls "${CLAUDE_DIR}/skills/"*.md | wc -l | tr -d ' ')"
+    fi
+    local _hook_count=0
+    if ls "${CLAUDE_DIR}/hooks/"*.sh >/dev/null 2>&1; then
+        _hook_count="$(ls "${CLAUDE_DIR}/hooks/"*.sh | wc -l | tr -d ' ')"
+    fi
+    printf '  Skills:  %s skills available\n' "${_skill_count}"
+    printf '  Hooks:   %s hooks configured\n' "${_hook_count}"
+    local _mem_line='initialized'
+    if [ -n "${PYTHON}" ]; then
+        _mem_line="$("${PYTHON}" "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || echo 'initialized')"
+    fi
+    printf '  Memory:  %s\n' "${_mem_line}"
+    printf '\n'
+    printf 'Start a project: cd your-project && lstack init\n'
+}
+
 cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
@@ -521,6 +756,8 @@ shift 2>/dev/null || true
 case "${cmd}" in
     init)      cmd_init "$@" ;;
     settings)  cmd_settings "$@" ;;
+    doctor)    cmd_doctor "$@" ;;
+    onboard)   cmd_onboard "$@" ;;
     memory)    cmd_memory "$@" ;;
     search)    cmd_search "$@" ;;
     logs)      cmd_logs "$@" ;;
