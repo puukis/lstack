@@ -11,14 +11,24 @@ Global handover lives in ~/.claude/memory/handover.md.
 
 ## Skills
 On-demand only. Never preload. Invoke via slash command.
-/engineer  — write production code; read patterns first; run tests after
-/planner   — structured task breakdown; clarify before planning; use TodoWrite
-/reviewer  — numbered findings only; [N] [SEVERITY] [file:line] — [issue]
-/refactor  — improve structure; tests before and after; document changes
-/test      — write tests only; read existing patterns; never touch source
-/debug     — reproduce → isolate → hypothesize → verify → state root cause
-/ship      — pre-ship checklist: tests, no debug code, env vars, changelog, readme
-/docs      — read source before writing; never invent API signatures
+/engineer     — write production code; read patterns first; run tests after
+/planner      — structured task breakdown; clarify before planning; use TodoWrite
+/reviewer     — numbered findings only; [N] [SEVERITY] [file:line] — [issue]
+/refactor     — improve structure; tests before and after; document changes
+/test         — write tests only; read existing patterns; never touch source
+/debug        — reproduce → isolate → hypothesize → verify → state root cause
+/ship         — pre-ship checklist: tests, no debug code, env vars, changelog, readme
+/docs         — read source before writing; never invent API signatures
+/interrogate  — run before any large or vague request; extracts real requirements
+/blueprint    — generate .blueprint.md spec before any implementation
+
+## Intent detection
+Auto-activate /interrogate when: request is a feature/system/workflow (not a bug/edit), missing who/success/constraints, and estimated work >30 min.
+Auto-activate /blueprint when: requirements are clear, no .blueprint.md exists, user says "let's build"/"implement"/"write the code" without prior /planner or /build.
+Auto-activate /reviewer when: user says "review", "check this", "LGTM?", or mentions a PR/diff.
+Auto-activate /debug when: user describes a bug, error, or unexpected behavior, or message contains a stack trace.
+Auto-activate /security when: user mentions auth/login/token/password/API key/deploy/production AND asks for a review or check.
+Rules: fires once per topic; never auto-activate /ship, /parallel, or /forget; announce briefly then proceed without asking permission.
 
 ## Rules
 LOOP: Same tool + identical input 3× = stop. Output loop message. Never retry blind.

@@ -78,6 +78,21 @@ timestamped backup before installing. Your personal memory files
 | Stop             | `hooks/stop.sh`             | Run project tests before finishing   |
 | UserPromptSubmit | `scripts/token-budget.sh`   | Warn on high context usage           |
 
+## Skills
+
+| Skill          | Description                                                      |
+|----------------|------------------------------------------------------------------|
+| /engineer      | Write production code; reads patterns first, runs tests after   |
+| /planner       | Structured task breakdown; clarify before planning              |
+| /reviewer      | Numbered findings only; never rewrites, never praises           |
+| /refactor      | Improve structure without changing behavior                     |
+| /test          | Write tests only; never touches source files                    |
+| /debug         | Reproduce → isolate → hypothesize → verify before any fix       |
+| /ship          | Pre-ship checklist: tests, env vars, changelog, readme          |
+| /docs          | Read source before writing; never invents API signatures        |
+| /interrogate   | One-question-at-a-time requirement clarification before planning |
+| /blueprint     | Generate .blueprint.md spec before writing any code             |
+
 ## Portability
 
 All hooks source `scripts/os.sh` which provides:
