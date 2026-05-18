@@ -25,6 +25,7 @@ Commands:
   dashboard         Live display of parallel agent worktrees
   upgrade           Pull latest lstack from git origin
   publish           Package lstack for open-source sharing
+  forget [query]    Delete matching observations from persistent memory
   help              Show this message
 EOF
 }
@@ -741,6 +742,54 @@ PREFEOF
     printf 'Start a project: cd your-project && lstack init\n'
 }
 
+cmd_forget() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local query="$*"
+    if [ -z "${query}" ]; then
+        echo "Usage: lstack forget [search terms]"
+        echo "Searches and deletes matching observations from persistent memory."
+        exit 1
+    fi
+
+    echo "Searching for: ${query}"
+    results="$("${PYTHON}" "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
+    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try: print(len(json.load(sys.stdin)))
+except: print(0)
+" 2>/dev/null || echo 0)"
+
+    if [ "${count}" -eq 0 ]; then
+        echo "No observations matched '${query}'"
+        exit 0
+    fi
+
+    echo ""
+    echo "Will delete ${count} observation(s):"
+    printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try:
+    for i,it in enumerate(json.load(sys.stdin),1):
+        print(f'  [{i}] {it[\"content\"][:80]}')
+except: pass
+"
+    echo ""
+    printf "Delete these? [y/N] "
+    read -r confirm
+    if [ "${confirm}" != "y" ] && [ "${confirm}" != "Y" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    result="$("${PYTHON}" "${DB_PY}" forget "${query}" 2>/dev/null)"
+    deleted="$(printf '%s' "${result}" | "${PYTHON}" -c "
+import sys,json
+try: print(json.load(sys.stdin).get('deleted',0))
+except: print(0)
+")"
+    echo "Deleted ${deleted} observation(s)."
+}
+
 cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
@@ -766,6 +815,7 @@ case "${cmd}" in
     dashboard) cmd_dashboard "$@" ;;
     upgrade)   cmd_upgrade "$@" ;;
     publish)   cmd_publish "$@" ;;
+    forget)    cmd_forget "$@" ;;
     help|--help|-h) usage ;;
     *)
         echo "Unknown command: ${cmd}"

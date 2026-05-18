@@ -321,6 +321,58 @@ def cmd_stats(args):
     print(f"Newest entry: {newest[:10] if newest != 'none' else newest}")
 
 
+def cmd_forget(args):
+    query = args.query
+    con = connect()
+    init_db(con)
+    fts = has_fts5(con)
+
+    results = []
+    try:
+        if fts:
+            rows = con.execute(
+                """SELECT o.id, o.content, o.created_at, o.project
+                   FROM observations_fts f
+                   JOIN observations o ON o.id = f.rowid
+                   WHERE observations_fts MATCH ?
+                   ORDER BY rank LIMIT 10""",
+                (query,)
+            ).fetchall()
+        else:
+            like = f"%{query}%"
+            rows = con.execute(
+                "SELECT id, content, created_at, project FROM observations "
+                "WHERE content LIKE ? OR tags LIKE ? ORDER BY created_at DESC LIMIT 10",
+                (like, like)
+            ).fetchall()
+        for row_id, content, created_at, project in rows:
+            results.append({"id": row_id, "content": content,
+                            "created_at": created_at, "project": project})
+    except Exception:
+        results = []
+
+    if not results:
+        print(json.dumps({"deleted": 0, "message": f"No observations matched '{query}'"}))
+        con.close()
+        return
+
+    ids = [r["id"] for r in results]
+    placeholders = ",".join("?" * len(ids))
+    con.execute(f"DELETE FROM observations WHERE id IN ({placeholders})", ids)
+    con.commit()
+
+    if fts:
+        try:
+            con.execute("INSERT INTO observations_fts(observations_fts) VALUES ('rebuild')")
+            con.commit()
+        except Exception:
+            pass
+
+    con.close()
+    deleted_contents = [r["content"][:80] for r in results]
+    print(json.dumps({"deleted": len(ids), "removed": deleted_contents}))
+
+
 def cmd_prune(args):
     days = args.days or 90
     cutoff = datetime.now(timezone.utc)
@@ -380,6 +432,9 @@ def main():
     p = sub.add_parser("prune")
     p.add_argument("--days", type=int, default=90)
 
+    p = sub.add_parser("forget")
+    p.add_argument("query", help="Search term to match observations for deletion")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -390,6 +445,7 @@ def main():
         "search": cmd_search,
         "stats": cmd_stats,
         "prune": cmd_prune,
+        "forget": cmd_forget,
     }
 
     if args.cmd in dispatch:
