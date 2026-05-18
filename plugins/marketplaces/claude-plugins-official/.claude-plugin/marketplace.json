@@ -633,7 +633,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/CrowdStrike/foundry-skills.git",
-        "sha": "e7fa0260b5a413d9a459d3afbc5ba427da6c6e04"
+        "sha": "4b517aa5729d5bb5e397ff779f98eb05c91d1b21"
       },
       "homepage": "https://github.com/CrowdStrike/foundry-skills"
     },
@@ -2245,6 +2245,20 @@
         "sha": "ab0f09b2ddc6682a7f69055c7861009ec6062775"
       },
       "homepage": "https://developers.zoom.us/"
+    },
+    {
+      "name": "zoominfo",
+      "description": "Search companies and contacts, enrich leads, find lookalikes, and get AI-ranked contact recommendations. Pre-built skills chain multiple ZoomInfo tools into complete B2B sales workflows.",
+      "author": {
+        "name": "ZoomInfo"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Zoominfo/zoominfo-mcp-plugin.git",
+        "sha": "14752e4553312d8af3eb3a3264a97d76bb3e0215"
+      },
+      "homepage": "https://www.zoominfo.com"
     },
     {
       "name": "zscaler",
