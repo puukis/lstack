@@ -45,18 +45,8 @@ fi
 
 iso="$(iso_now)"
 
-if [ -z "${test_cmd}" ]; then
-    printf '[%s] STOP no-test-cmd found\n' "${iso}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
-    exit 0
-fi
-
-# Run test command with 60s timeout
-test_output="$(cd "${git_root}" && timeout 60 bash -c "${test_cmd}" 2>&1)" && test_rc=0 || test_rc=$?
-
-if [ "${test_rc}" -eq 0 ]; then
-    printf '[%s] STOP tests-passed cmd="%s"\n' "${iso}" "${test_cmd}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
-
-    # AUTO-LEARNING: extract reusable knowledge from this session's transcript
+run_learning_extraction() {
+    local transcript_path
     transcript_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
 import sys, json
 data = {}
@@ -67,18 +57,23 @@ except Exception:
 print(data.get('transcript_path', ''))
 " 2>/dev/null || echo '')"
 
-    if [ -n "${transcript_path}" ] && [ -f "${transcript_path}" ] && command -v claude >/dev/null 2>&1; then
-        # Determine target patterns.md
-        if [ -n "${git_root}" ] && [ -d "${git_root}/.claude/memory" ]; then
-            patterns_file="${git_root}/.claude/memory/patterns.md"
-        else
-            patterns_file="${CLAUDE_DIR}/memory/patterns.md"
-        fi
+    [ -z "${transcript_path}" ] && return 0
+    [ ! -f "${transcript_path}" ] && return 0
+    command -v claude >/dev/null 2>&1 || return 0
 
-        # Embed last 2000 chars of transcript in prompt to stay lean
-        transcript_excerpt="$(tail -c 2000 "${transcript_path}" 2>/dev/null || true)"
-        if [ -n "${transcript_excerpt}" ]; then
-            learn_prompt="Session transcript (excerpt):
+    local patterns_file
+    if [ -n "${git_root}" ] && [ -d "${git_root}/.claude/memory" ]; then
+        patterns_file="${git_root}/.claude/memory/patterns.md"
+    else
+        patterns_file="${CLAUDE_DIR}/memory/patterns.md"
+    fi
+
+    local transcript_excerpt
+    transcript_excerpt="$(tail -c 2000 "${transcript_path}" 2>/dev/null || true)"
+    [ -z "${transcript_excerpt}" ] && return 0
+
+    local learn_prompt
+    learn_prompt="Session transcript (excerpt):
 ${transcript_excerpt}
 
 ---
@@ -92,20 +87,21 @@ persistent memory. Only include items matching these criteria:
 Output ONLY the bullets, max 20 words each, plain text.
 If nothing meets the criteria, output nothing."
 
-            learnings="$(printf '%s' "${learn_prompt}" | claude -p 2>/dev/null || true)"
+    local learnings
+    learnings="$(printf '%s' "${learn_prompt}" | claude -p 2>/dev/null || true)"
+    [ -z "${learnings}" ] && return 0
 
-            if [ -n "${learnings}" ]; then
-                # Ensure file exists with header
-                if [ ! -f "${patterns_file}" ]; then
-                    printf '# Patterns\n\n## Solutions\n' > "${patterns_file}"
-                fi
-                # Append bullets with ISO date prefix
-                iso_ts="$(iso_now)"
-                printf '%s' "${learnings}" | while IFS= read -r line; do
-                    [ -n "${line}" ] && printf '- [%s] %s\n' "${iso_ts}" "${line}" >> "${patterns_file}"
-                done
-                # Cap at 100 lines: trim oldest 20 bullets if over limit
-                "${PYTHON}" - "${patterns_file}" <<'PYCAP' 2>/dev/null || true
+    if [ ! -f "${patterns_file}" ]; then
+        printf '# Patterns\n\n## Solutions\n' > "${patterns_file}"
+    fi
+
+    local iso_ts
+    iso_ts="$(iso_now)"
+    printf '%s' "${learnings}" | while IFS= read -r line; do
+        [ -n "${line}" ] && printf '- [%s] %s\n' "${iso_ts}" "${line}" >> "${patterns_file}"
+    done
+
+    "${PYTHON}" - "${patterns_file}" <<'PYCAP' 2>/dev/null || true
 import sys
 path = sys.argv[1]
 with open(path, 'r') as f:
@@ -119,15 +115,16 @@ if len(lines) > 100:
         f.writelines(bullets)
 PYCAP
 
-                # --- store learnings in persistent DB --- (db.py observe)
-                _learn_session_id="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
-                _learn_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-                _learn_project="$(to_native_path "${_learn_project_raw}" 2>/dev/null || echo "${_learn_project_raw}")"
-                _learn_project="${_learn_project//\\//}"
+    local _learn_session_id _learn_project_raw _learn_project
+    _learn_session_id="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
+    _learn_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _learn_project="$(to_native_path "${_learn_project_raw}" 2>/dev/null || echo "${_learn_project_raw}")"
+    _learn_project="${_learn_project//\\//}"
 
-                printf '%s' "${learnings}" | while IFS= read -r _learn_line; do
-                    [ -z "${_learn_line}" ] && continue
-                    _learn_tags="$("${PYTHON}" -c "
+    printf '%s' "${learnings}" | while IFS= read -r _learn_line; do
+        [ -z "${_learn_line}" ] && continue
+        local _learn_tags
+        _learn_tags="$("${PYTHON}" -c "
 import sys,os
 sys.path.insert(0,os.path.expanduser('~/.claude/scripts'))
 try:
@@ -135,13 +132,26 @@ try:
   print(','.join(extract_keywords(sys.argv[1])))
 except: print('')
 " "${_learn_line}" 2>/dev/null || echo '')"
-                    "${PYTHON}" "${DB_PY}" observe \
-                        "${_learn_session_id}" "${_learn_project}" "${_learn_line}" "${_learn_tags}" 2>/dev/null || true
-                done
-                # --- end store learnings ---
-            fi
-        fi
-    fi
+        "${PYTHON}" "${DB_PY}" observe \
+            "${_learn_session_id}" "${_learn_project}" "${_learn_line}" "${_learn_tags}" 2>/dev/null || true
+    done
+
+    printf '[%s] STOP learning-extracted\n' "$(iso_now)" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+}
+
+if [ -z "${test_cmd}" ]; then
+    printf '[%s] STOP no-test-cmd found\n' "${iso}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+    run_learning_extraction
+    exit 0
+fi
+
+# Run test command with 60s timeout
+test_output="$(cd "${git_root}" && timeout 60 bash -c "${test_cmd}" 2>&1)" && test_rc=0 || test_rc=$?
+
+if [ "${test_rc}" -eq 0 ]; then
+    printf '[%s] STOP tests-passed cmd="%s"\n' "${iso}" "${test_cmd}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+
+    run_learning_extraction
 
     exit 0
 else
