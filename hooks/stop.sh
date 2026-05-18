@@ -120,13 +120,14 @@ if len(lines) > 100:
 PYCAP
 
                 # --- store learnings in persistent DB --- (db.py observe)
-                _learn_session_id="$(${PYTHON} -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
-                _learn_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-                _learn_project="$(realpath "${_learn_project}" 2>/dev/null || echo "${_learn_project}")"
+                _learn_session_id="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
+                _learn_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+                _learn_project="$(to_native_path "${_learn_project_raw}" 2>/dev/null || echo "${_learn_project_raw}")"
+                _learn_project="${_learn_project//\\//}"
 
                 printf '%s' "${learnings}" | while IFS= read -r _learn_line; do
                     [ -z "${_learn_line}" ] && continue
-                    _learn_tags="$(${PYTHON} -c "
+                    _learn_tags="$("${PYTHON}" -c "
 import sys,os
 sys.path.insert(0,os.path.expanduser('~/.claude/scripts'))
 try:
@@ -134,7 +135,7 @@ try:
   print(','.join(extract_keywords(sys.argv[1])))
 except: print('')
 " "${_learn_line}" 2>/dev/null || echo '')"
-                    ${PYTHON} "${HOME}/.claude/scripts/db.py" observe \
+                    "${PYTHON}" "${DB_PY}" observe \
                         "${_learn_session_id}" "${_learn_project}" "${_learn_line}" "${_learn_tags}" 2>/dev/null || true
                 done
                 # --- end store learnings ---

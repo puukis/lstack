@@ -190,8 +190,10 @@ except: print('')
 " "${input}" 2>/dev/null || echo '')"
 
             if [ -n "${_mem_keywords}" ]; then
-                _mem_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-                _mem_results="$("${PYTHON}" "${HOME}/.claude/scripts/db.py" search \
+                _mem_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+                _mem_project="$(to_native_path "${_mem_project_raw}" 2>/dev/null || echo "${_mem_project_raw}")"
+                _mem_project="${_mem_project//\\//}"
+                _mem_results="$("${PYTHON}" "${DB_PY}" search \
                     "${_mem_keywords}" --project "${_mem_project}" --limit 2 2>/dev/null || echo '[]')"
 
                 _mem_count="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
