@@ -287,6 +287,39 @@ PYEOF
     fi
 fi
 
+# CONTEXT PRUNER: warn on repeated identical Bash commands
+if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
+    READS_FILE="${LOG_DIR}/reads-${PPID}.json"
+    cmd_hash="$("${PYTHON}" -c "
+import hashlib,sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+" "${bash_cmd}" 2>/dev/null || echo '')"
+
+    if [ -n "${cmd_hash}" ]; then
+        already_run="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo '0'
+import json
+reads_file = "${READS_FILE}"
+cmd_key = "cmd:${cmd_hash}"
+try:
+    with open(reads_file) as f:
+        state = json.load(f)
+except Exception:
+    state = {}
+count = state.get("cmds", {}).get(cmd_key, 0) + 1
+state.setdefault("cmds", {})[cmd_key] = count
+with open(reads_file, "w") as f:
+    json.dump(state, f)
+print(count)
+PYEOF
+)"
+        if [ "${already_run}" -ge 2 ] 2>/dev/null; then
+            _cmd_preview="$(printf '%s' "${bash_cmd}" | head -c 60)"
+            printf '{"additionalContext": "Note: this command has been run %s times this session: %s — if the result has not changed, use your existing knowledge of the output."}\n' \
+                "${already_run}" "${_cmd_preview}"
+        fi
+    fi
+fi
+
 # LOG
 iso="$(iso_now)"
 printf '[%s] %s %s\n' "${iso}" "${tool_name}" "${input_hash}" >> "${LOG_FILE}" 2>/dev/null || true

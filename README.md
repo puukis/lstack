@@ -79,6 +79,7 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | /parallel      | explicitly invoked                           | up to 3 sub-agents in isolated git worktrees                   |
 | /remember      | explicitly invoked                           | stores a finding in persistent memory                          |
 | /forget        | explicitly invoked                           | deletes matching observations from memory                      |
+| /debrief       | explicitly invoked                           | end-of-session reflection written to disk in under 300 words   |
 
 ---
 

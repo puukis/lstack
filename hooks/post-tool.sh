@@ -50,6 +50,24 @@ iso="$(iso_now)"
 # File-editing tools run the formatter and exit. Other tools exit cleanly.
 if [ "${TOOL_NAME}" = "Bash" ]; then
     printf '[%s] post-tool bash-tool\n' "${iso}" >> "${LOG_FILE}" 2>/dev/null || true
+
+    # CONTEXT PRUNER: warn when Bash response is large
+    response_len="$(printf '%s' "${INPUT}" | "${PYTHON}" -c "
+import sys,json
+try:
+  d=json.load(sys.stdin)
+  r=d.get('tool_response',{})
+  if isinstance(r,str): print(len(r))
+  elif isinstance(r,dict): print(len(str(r.get('output',''))))
+  else: print(0)
+except: print(0)
+" 2>/dev/null || echo '0')"
+
+    if [ "${response_len}" -ge 3000 ] 2>/dev/null; then
+        printf '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "Large tool response (%s chars). Extract only what you need — do not summarize the entire output back into context."}}\n' \
+            "${response_len}"
+    fi
+
     # fall through to signal detector below
 
 elif [ -z "${file_path}" ] || [ ! -f "${file_path}" ]; then

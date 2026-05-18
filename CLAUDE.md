@@ -21,6 +21,7 @@ On-demand only. Never preload. Invoke via slash command.
 /docs         — read source before writing; never invent API signatures
 /interrogate  — run before any large or vague request; extracts real requirements
 /blueprint    — generate .blueprint.md spec before any implementation
+/debrief      — end-of-session reflection: what worked, what broke, what to change next time
 
 ## Intent detection
 Auto-activate /interrogate when: request is a feature/system/workflow (not a bug/edit), missing who/success/constraints, and estimated work >30 min.
