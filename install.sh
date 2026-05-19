@@ -9,6 +9,31 @@ set -euo pipefail
 LSTACK_REPO="https://github.com/puukis/lstack"
 CLAUDE_DIR="${HOME}/.claude"
 
+# Detect script dir: BASH_SOURCE works for file execution, $0 fallback for piped stdin
+_realpath() {
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$1"
+    elif [ -d "$1" ]; then
+        (cd "$1" && pwd)
+    else
+        (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename "$1")")
+    fi
+}
+_detect_script_dir() {
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+        dirname "$(_realpath "${BASH_SOURCE[0]}")"
+    elif [ -n "${0:-}" ] && [ -f "${0}" ]; then
+        dirname "$(_realpath "${0}")"
+    else
+        printf '%s\n' "${PWD}"
+    fi
+}
+SCRIPT_DIR="$(_detect_script_dir)"
+IS_LOCAL_REPO=false
+if [ -f "${SCRIPT_DIR}/bin/lstack" ] && [ -f "${SCRIPT_DIR}/scripts/gen-settings.sh" ]; then
+    IS_LOCAL_REPO=true
+fi
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -56,12 +81,6 @@ read -r _confirm
 # ---------------------------------------------------------------------------
 # Step 2 — Detect existing ~/.claude
 # ---------------------------------------------------------------------------
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IS_LOCAL_REPO=false
-if [ -f "${SCRIPT_DIR}/bin/lstack" ] && [ -f "${SCRIPT_DIR}/scripts/gen-settings.sh" ]; then
-    IS_LOCAL_REPO=true
-fi
 
 if [ -d "${CLAUDE_DIR}" ]; then
     if [ -f "${CLAUDE_DIR}/.git-source" ]; then
