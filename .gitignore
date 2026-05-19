@@ -9,6 +9,10 @@ memory/handover.md
 memory/preferences.md
 memory/patterns.md
 memory/projects.md
+memory/feedback_*.md
+memory/user_*.md
+memory/project_*.md
+memory/reference_*.md
 .claude/memory/
 
 # Credentials & auth
