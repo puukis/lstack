@@ -1,3 +1,14 @@
+# Generated at install time (machine-specific)
+settings.json
+.git-source
+.last-cleanup
+
+# Local / personal Claude Code settings
+.claude/settings.local.json
+
+# Downloaded plugin marketplace data
+plugins/
+
 # Runtime / logs
 logs/
 *.log
