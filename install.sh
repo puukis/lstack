@@ -544,8 +544,15 @@ if [ "${IS_LOCAL_REPO}" = true ]; then
     ui_success "Files copied from local repo"
 else
     ui_info "Source: ${LSTACK_REPO}"
-    _run_quiet "Cloning repository" git clone --quiet "${LSTACK_REPO}" "${CLAUDE_DIR}"
-    ui_success "Repository cloned"
+    _LSTACK_TMP="$(mktemp -d)"
+    _run_quiet "Cloning repository" git clone --quiet "${LSTACK_REPO}" "${_LSTACK_TMP}"
+    if command -v rsync &>/dev/null; then
+        _run_quiet "Copying files" rsync -a --exclude='.git' "${_LSTACK_TMP}/" "${CLAUDE_DIR}/"
+    else
+        _run_quiet "Copying files" bash -c "mkdir -p '${CLAUDE_DIR}' && cp -r '${_LSTACK_TMP}/.' '${CLAUDE_DIR}/' && rm -rf '${CLAUDE_DIR}/.git'"
+    fi
+    rm -rf "${_LSTACK_TMP}"
+    ui_success "Repository cloned and files merged"
 fi
 
 # ─── Step 4: Permissions + settings ──────────────────────────────────────────
