@@ -1,7 +1,7 @@
 ---
 name: remember
 description: Store a single observation in persistent memory via db.py — invoked via /remember
-allowed-tools: Bash
+allowed-tools: Bash, AskUserQuestion
 disable-model-invocation: false
 ---
 
@@ -18,16 +18,28 @@ that should survive beyond this conversation.
 
 2. Extract 3-6 keywords as tags (comma-separated, no spaces).
 
-3. Ask the user whether this is project-specific or global knowledge:
-   "Should I save this to project memory (this project only) or
-   global memory (available in all projects)?"
-   Wait for the answer. Accept: project/global/yes/no/here/everywhere
-   as reasonable inputs. Default to project if unclear.
+3. Use the AskUserQuestion tool to ask the user which scope to save to.
+   Call it with exactly one question:
+
+   AskUserQuestion({
+     questions: [{
+       question: "Save this to project memory or global memory?",
+       options: [
+         "Project — this project only",
+         "Global — inject in every project"
+       ]
+     }]
+   })
+
+   - If the user selects "Project": use git rev-parse --show-toplevel
+     as the project path
+   - If the user selects "Global": use the string "global" as the
+     project value
 
 4. Determine session_id:
    Bash: python3 -c "import os; print(os.getppid())"
 
-5. Determine project path:
+5. Determine project path (based on scope from step 3):
    - If scope is project: run git rev-parse --show-toplevel 2>/dev/null || pwd
    - If scope is global: use the string "global" as the project value
 
