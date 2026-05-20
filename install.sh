@@ -423,6 +423,57 @@ fi
 printf '\n'
 bash "${CLAUDE_DIR}/bin/lstack" onboard
 
+# ─── Add lstack to PATH ───────────────────────────────────────────────────────
+
+_lstack_bin="${CLAUDE_DIR}/bin"
+_path_export="export PATH=\"\$HOME/.claude/bin:\$PATH\""
+_path_fish="fish_add_path ~/.claude/bin"
+
+_add_to_path() {
+    local _rc="$1"
+    local _line="$2"
+    if [ -f "${_rc}" ] && grep -qF "${_line}" "${_rc}" 2>/dev/null; then
+        return 0  # already present
+    fi
+    printf '\n# lstack CLI\n%s\n' "${_line}" >> "${_rc}"
+    printf 'true'
+}
+
+case ":${PATH}:" in
+    *":${_lstack_bin}:"*)
+        _ok "lstack already in PATH"
+        ;;
+    *)
+        _shell_name="$(basename "${SHELL:-bash}")"
+        _added_to=""
+        case "${_shell_name}" in
+            fish)
+                _fish_cfg="${HOME}/.config/fish/config.fish"
+                if [ "$(_add_to_path "${_fish_cfg}" "${_path_fish}")" = "true" ]; then
+                    _added_to="${_fish_cfg}"
+                fi
+                ;;
+            zsh)
+                if [ "$(_add_to_path "${HOME}/.zshrc" "${_path_export}")" = "true" ]; then
+                    _added_to="${HOME}/.zshrc"
+                fi
+                ;;
+            *)
+                if [ "$(_add_to_path "${HOME}/.bashrc" "${_path_export}")" = "true" ]; then
+                    _added_to="${HOME}/.bashrc"
+                fi
+                ;;
+        esac
+
+        if [ -n "${_added_to}" ]; then
+            _ok "Added lstack to PATH in ${_added_to}"
+            _info "Run: source ${_added_to}  (or restart your terminal)"
+        else
+            _ok "lstack PATH entry already present"
+        fi
+        ;;
+esac
+
 # ─── Step 8: Post-install verification ────────────────────────────────────────
 
 _step "Verifying installation"
