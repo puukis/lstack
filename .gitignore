@@ -54,3 +54,4 @@ mcp-needs-auth-cache.json
 memory/lstack.db
 memory/lstack.db-shm
 memory/lstack.db-wal
+memory/MEMORY.md
