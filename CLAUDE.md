@@ -47,6 +47,10 @@ TOKEN: Never read an entire large file when you only need a section. Use Bash wi
 TOKEN: When asked to understand a codebase, read the directory structure and key entrypoints only. Ask which files matter before reading everything.
 
 ## Memory
+When the SessionStart hook injects "persistent memory (past sessions)",
+treat that content as established project knowledge. Do not re-read files
+to rediscover it. Reference it directly when answering questions.
+
 Proactively call /remember when you encounter any of these mid-session:
 - A bug whose root cause was non-obvious (after confirming the fix works)
 - An API, library, or framework behaving differently than documented

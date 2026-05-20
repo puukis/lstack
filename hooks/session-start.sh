@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # SessionStart hook: load memory context, log session
 
-set -euo pipefail
-
 source "${HOME}/.claude/scripts/os.sh"
 
 CLAUDE_DIR="${HOME}/.claude"
