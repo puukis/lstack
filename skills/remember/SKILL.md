@@ -15,16 +15,28 @@ that should survive beyond this conversation.
 1. Summarize the finding in one sentence (max 150 chars). Be specific.
    Good: "RSC async params must be awaited before destructuring in Next.js 15"
    Bad:  "there was a bug with params"
-2. Extract 3–6 keywords as tags (comma-separated, no spaces).
-3. Determine session_id and project:
-   - session_id: run `$PYTHON -c "import os; print(os.getppid())"`
-   - project: run `git rev-parse --show-toplevel 2>/dev/null || pwd`
-4. Run:
-   ```
-   $PYTHON ~/.claude/scripts/db.py observe \
-     "[session_id]" "[project]" "[summary]" "[tag1,tag2,tag3]"
-   ```
-5. Confirm to the user: "Stored: [summary]"
+
+2. Extract 3-6 keywords as tags (comma-separated, no spaces).
+
+3. Ask the user whether this is project-specific or global knowledge:
+   "Should I save this to project memory (this project only) or
+   global memory (available in all projects)?"
+   Wait for the answer. Accept: project/global/yes/no/here/everywhere
+   as reasonable inputs. Default to project if unclear.
+
+4. Determine session_id:
+   Bash: python3 -c "import os; print(os.getppid())"
+
+5. Determine project path:
+   - If scope is project: run git rev-parse --show-toplevel 2>/dev/null || pwd
+   - If scope is global: use the string "global" as the project value
+
+6. Run:
+   python3 ~/.claude/scripts/db.py observe \
+     "[session_id]" "[project_or_global]" "[summary]" "[tag1,tag2,tag3]"
+
+7. Confirm to the user:
+   "Stored [global|project]: [summary]"
 
 ## Constraints
 - One observation per /remember call. Do not batch multiple findings.

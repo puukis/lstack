@@ -27,10 +27,10 @@ SEARCH — find observations matching a query:
     or the Windows path from os.sh $DB_PY variable.
     Present results as a numbered list with date and content.
 
-RECENT — show the 5 most recent observations for this project:
+RECENT — show the 5 most recent observations for this project (and global):
     Bash: python $DB_PY session-start "recall-query" "[project]"
     Where project = git root or pwd.
-    Present as a dated list.
+    Output already includes [scope] labels — present as a dated list.
 
 STATS — show memory database summary:
     Bash: python $DB_PY stats
@@ -69,8 +69,10 @@ LIST BY TAG — find observations with a specific tag:
 
 ## Output format
 Numbered list for search results:
-  [1] 2026-05-17  prefer bun install over npm install — bun is faster
+  [1] 2026-05-17  [project]  prefer bun install over npm install — bun is faster
        tags: bun, npm, install
+  [2] 2026-05-17  [global]   SessionStart hook requires hookSpecificOutput wrapper
+       tags: hook, session, wrapper
 
 Plain text for stats output.
 One confirmation line after any modification.

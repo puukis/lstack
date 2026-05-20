@@ -164,19 +164,34 @@ def cmd_session_start(args):
     except Exception:
         pass
 
-    # Fetch 5 most recent observations for this project
-    rows = con.execute(
-        "SELECT content, created_at FROM observations WHERE project = ? ORDER BY created_at DESC LIMIT 5",
+    # Project-scoped observations
+    proj_rows = con.execute(
+        "SELECT content, created_at, project FROM observations "
+        "WHERE project = ? ORDER BY created_at DESC LIMIT 5",
         (project,)
     ).fetchall()
-    con.close()
 
+    # Global observations
+    global_rows = con.execute(
+        "SELECT content, created_at, project FROM observations "
+        "WHERE project = 'global' ORDER BY created_at DESC LIMIT 5",
+        ()
+    ).fetchall()
+
+    # Merge, deduplicate by content, cap at 5
+    seen = set()
     lines = []
-    for content, created_at in rows:
-        date = created_at[:10] if created_at else ""
-        # Truncate content to 100 chars
-        c = content[:100] if content else ""
-        lines.append(f"[{date}] {c}")
+    for content, created_at, proj in proj_rows + global_rows:
+        if content not in seen:
+            seen.add(content)
+            scope = "global" if proj == "global" else "project"
+            date = created_at[:10] if created_at else ""
+            c = content[:100] if content else ""
+            lines.append(f"[{date}] [{scope}] {c}")
+        if len(lines) >= 5:
+            break
+
+    con.close()
 
     context = "\n".join(lines)
     print(json.dumps({"context": context, "count": len(lines)}))
@@ -244,7 +259,8 @@ def cmd_search(args):
                     """SELECT o.content, o.project, o.created_at, o.tags
                        FROM observations_fts f
                        JOIN observations o ON o.id = f.rowid
-                       WHERE observations_fts MATCH ? AND o.project = ?
+                       WHERE observations_fts MATCH ?
+                       AND (o.project = ? OR o.project = 'global')
                        ORDER BY rank LIMIT ?""",
                     (query, project, limit)
                 ).fetchall()
@@ -267,7 +283,8 @@ def cmd_search(args):
                 if project:
                     rows = con.execute(
                         "SELECT content, project, created_at, tags FROM observations "
-                        "WHERE (content LIKE ? OR tags LIKE ?) AND project = ? "
+                        "WHERE (content LIKE ? OR tags LIKE ?) "
+                        "AND (project = ? OR project = 'global') "
                         "ORDER BY created_at DESC LIMIT ?",
                         (like, like, project, limit)
                     ).fetchall()

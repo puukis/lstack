@@ -84,7 +84,7 @@ except: pass
 " 2>/dev/null || true)"
 
 if [ -n "${_db_context}" ]; then
-    _db_block="--- persistent memory (past sessions) ---
+    _db_block="--- persistent memory (past sessions, project + global) ---
 ${_db_context}
 --- end persistent memory ---"
     if [ -n "${memory_content}" ]; then
