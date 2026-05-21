@@ -97,6 +97,36 @@ ${_db_block}"
 fi
 # --- end lstack persistent memory ---
 
+# --- debrief injection ---
+# Load last debrief if it exists and is less than 7 days old
+_debrief_file=""
+if [ -n "${git_root}" ] && [ -f "${git_root}/.claude/memory/debrief.md" ]; then
+    _debrief_file="${git_root}/.claude/memory/debrief.md"
+elif [ -f "${CLAUDE_DIR}/memory/debrief.md" ]; then
+    _debrief_file="${CLAUDE_DIR}/memory/debrief.md"
+fi
+
+if [ -n "${_debrief_file}" ]; then
+    _debrief_age="$("${PYTHON}" -c "
+import os, time
+age = time.time() - os.path.getmtime('${_debrief_file}')
+print(int(age / 86400))
+" 2>/dev/null || echo '99')"
+
+    if [ "${_debrief_age}" -lt 7 ] 2>/dev/null; then
+        _debrief_content="$(cat "${_debrief_file}" 2>/dev/null || true)"
+        if [ -n "${_debrief_content}" ]; then
+            _debrief_block="--- last session debrief ---
+${_debrief_content}
+--- end debrief ---"
+            memory_content="${memory_content}
+
+${_debrief_block}"
+        fi
+    fi
+fi
+# --- end debrief injection ---
+
 # Output additionalContext if we have content
 if [ -n "${memory_content}" ]; then
     # Escape for JSON

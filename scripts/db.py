@@ -20,6 +20,90 @@ STOPWORDS = {
     "type", "void", "async", "await", "string", "number", "boolean",
 }
 
+_embed_model = None
+_LSTACK_VENV = Path.home() / ".claude" / "venv"
+
+# Add venv to sys.path at import time so sqlite_vec is always importable
+def _add_venv_to_path():
+    """Add lstack venv site-packages to sys.path if not already there."""
+    venv_python = _LSTACK_VENV / "bin" / "python"
+    if not venv_python.exists():
+        return False
+    import subprocess
+    try:
+        sp = subprocess.check_output(
+            [str(venv_python), "-c",
+             "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        if sp and sp not in sys.path:
+            sys.path.insert(0, sp)
+        return True
+    except Exception:
+        return False
+
+_add_venv_to_path()
+
+
+def ensure_deps():
+    """Ensure sqlite-vec and sentence-transformers are available.
+
+    Uses the dedicated lstack venv at ~/.claude/venv. Creates it with
+    uv if missing.
+    """
+    missing = []
+    try:
+        import sqlite_vec
+    except ImportError:
+        missing.append("sqlite-vec")
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        missing.append("sentence-transformers")
+
+    if not missing:
+        return
+
+    import subprocess
+    venv_python = _LSTACK_VENV / "bin" / "python"
+
+    # Create venv if it doesn't exist
+    if not _LSTACK_VENV.exists():
+        subprocess.run(
+            ["uv", "venv", str(_LSTACK_VENV)],
+            capture_output=True, check=False
+        )
+
+    # Install into venv via uv pip
+    if _LSTACK_VENV.exists():
+        subprocess.run(
+            ["uv", "pip", "install", "--quiet",
+             f"--python={_LSTACK_VENV}", "--"] + missing,
+            check=False
+        )
+        _add_venv_to_path()
+    else:
+        # Fallback: try system pip with --break-system-packages
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install",
+             "--quiet", "--break-system-packages"] + missing,
+            check=False
+        )
+
+
+def embed(text: str) -> bytes:
+    """Return 384-dim float32 embedding as bytes. Lazy loads model."""
+    global _embed_model
+    ensure_deps()
+    if _embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embed_model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2"
+        )
+    import numpy as np
+    vec = _embed_model.encode([text], normalize_embeddings=True)[0]
+    return np.array(vec, dtype=np.float32).tobytes()
+
 
 def normalize_project(path):
     """Return a stable, cross-platform project path for DB storage."""
@@ -106,6 +190,13 @@ def init_db(con):
         );
     """)
 
+    # Add embedding column if not present
+    try:
+        con.execute("ALTER TABLE observations ADD COLUMN embedding BLOB")
+        con.commit()
+    except Exception:
+        pass  # column already exists
+
     if fts5:
         con.executescript("""
             CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
@@ -125,6 +216,20 @@ def init_db(con):
                 VALUES ('delete', old.id, old.content, old.tags);
             END;
         """)
+
+    # Add sqlite-vec virtual table
+    try:
+        import sqlite_vec
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+        con.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS observations_vec
+            USING vec0(embedding float[384])
+        """)
+        con.commit()
+    except Exception:
+        pass  # sqlite-vec not available, fall back to FTS5
 
     con.commit()
     return fts5
@@ -210,11 +315,28 @@ def cmd_session_end(args):
         "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
         (iso_now(), content, session_id)
     )
-    con.execute(
+    cur = con.execute(
         "INSERT INTO observations (session_id, project, content, tags, created_at) VALUES (?, ?, ?, ?, ?)",
         (session_id, project, content, tags[:200], iso_now())
     )
     con.commit()
+    row_id = cur.lastrowid
+
+    # Store embedding if sqlite-vec available
+    try:
+        import sqlite_vec
+        vec = embed(content)
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+        con.execute(
+            "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
+            (row_id, vec)
+        )
+        con.commit()
+    except Exception:
+        pass
+
     con.close()
     print("ok")
 
@@ -238,19 +360,85 @@ def cmd_observe(args):
     )
     con.commit()
     row_id = cur.lastrowid
+
+    # Store embedding if sqlite-vec available
+    try:
+        import sqlite_vec
+        vec = embed(content)
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+        con.execute(
+            "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
+            (row_id, vec)
+        )
+        con.commit()
+    except Exception:
+        pass
+
     con.close()
     print(f"ok {row_id}")
 
 
 def cmd_search(args):
     query = args.query
-    project = os.path.realpath(args.project) if args.project else None
-    limit = min(args.limit or 2, 5)
+    project = normalize_project(os.path.realpath(args.project)) if args.project else None
+    limit = min(args.limit or 5, 10)
 
     con = connect()
     init_db(con)
-    fts = has_fts5(con)
 
+    # Try semantic search first
+    try:
+        ensure_deps()
+        import sqlite_vec
+        query_vec = embed(query)
+
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+
+        if project:
+            rows = con.execute("""
+                SELECT o.id, o.content, o.project, o.created_at, o.tags,
+                       v.distance
+                FROM observations_vec v
+                JOIN observations o ON o.id = v.rowid
+                WHERE (o.project = ? OR o.project = 'global')
+                AND v.embedding MATCH ?
+                AND k = ?
+                ORDER BY v.distance
+            """, (project, query_vec, limit)).fetchall()
+        else:
+            rows = con.execute("""
+                SELECT o.id, o.content, o.project, o.created_at, o.tags,
+                       v.distance
+                FROM observations_vec v
+                JOIN observations o ON o.id = v.rowid
+                WHERE v.embedding MATCH ?
+                AND k = ?
+                ORDER BY v.distance
+            """, (query_vec, limit)).fetchall()
+
+        results = []
+        for row_id, content, proj, created_at, tags, distance in rows:
+            results.append({
+                "id": row_id,
+                "content": content,
+                "project": proj,
+                "created_at": created_at,
+                "tags": tags or "",
+                "score": round(1 - float(distance), 3),
+                "method": "semantic"
+            })
+        con.close()
+        print(json.dumps(results))
+        return
+
+    except Exception:
+        pass  # fall through to FTS5
+
+    fts = has_fts5(con)
     results = []
     try:
         if fts:
@@ -275,7 +463,6 @@ def cmd_search(args):
                 ).fetchall()
         else:
             print("FTS5 unavailable, using LIKE search (slower)", file=sys.stderr)
-            # Build LIKE conditions for each keyword
             keywords = query.replace(",", " ").split()
             if keywords:
                 kw = keywords[0]
@@ -311,6 +498,50 @@ def cmd_search(args):
 
     con.close()
     print(json.dumps(results))
+
+
+def cmd_embed_all(args):
+    """Backfill embeddings for all observations missing vectors."""
+    ensure_deps()
+    con = connect()
+    init_db(con)
+
+    try:
+        import sqlite_vec
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+    except Exception:
+        print("sqlite-vec not available")
+        con.close()
+        return
+
+    # Find observations with no vector
+    existing = set(
+        r[0] for r in con.execute(
+            "SELECT rowid FROM observations_vec"
+        ).fetchall()
+    )
+    all_obs = con.execute(
+        "SELECT id, content FROM observations"
+    ).fetchall()
+    missing = [(id_, content) for id_, content in all_obs
+               if id_ not in existing]
+
+    print(f"Backfilling {len(missing)} observations...")
+    for i, (obs_id, content) in enumerate(missing):
+        vec = embed(content)
+        con.execute(
+            "INSERT OR IGNORE INTO observations_vec(rowid, embedding) "
+            "VALUES (?, ?)",
+            (obs_id, vec)
+        )
+        if i % 10 == 0:
+            con.commit()
+            print(f"  {i}/{len(missing)}")
+    con.commit()
+    print(f"Done. Backfilled {len(missing)} observations.")
+    con.close()
 
 
 def cmd_edit(args):
@@ -385,6 +616,80 @@ def cmd_stats(args):
     print(f"Newest entry: {newest[:10] if newest != 'none' else newest}")
 
 
+def cmd_analytics(args):
+    """Show session and memory analytics."""
+    project = normalize_project(get_project())
+    con = connect()
+    init_db(con)
+
+    import time
+
+    # Observations per week (last 4 weeks)
+    weeks = []
+    for i in range(4):
+        week_start = time.time() - (i + 1) * 7 * 86400
+        week_end = time.time() - i * 7 * 86400
+        start_str = datetime.fromtimestamp(week_start, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_str = datetime.fromtimestamp(week_end, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        count = con.execute(
+            "SELECT COUNT(*) FROM observations WHERE created_at >= ? AND created_at < ?",
+            (start_str, end_str)
+        ).fetchone()[0]
+        weeks.append((f"week-{i}", count))
+
+    # Global vs project ratio
+    global_count = con.execute(
+        "SELECT COUNT(*) FROM observations WHERE project = 'global'"
+    ).fetchone()[0]
+    proj_count = con.execute(
+        "SELECT COUNT(*) FROM observations WHERE project = ?",
+        (project,)
+    ).fetchone()[0]
+    total = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+
+    # Top tags
+    tags_raw = con.execute(
+        "SELECT tags FROM observations WHERE tags != '' ORDER BY created_at DESC LIMIT 50"
+    ).fetchall()
+    tag_counts = {}
+    for (tags,) in tags_raw:
+        for tag in tags.split(","):
+            tag = tag.strip()
+            if tag:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:10]
+
+    # Sessions this week
+    week_ago = datetime.fromtimestamp(
+        time.time() - 7 * 86400, tz=timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sessions_week = con.execute(
+        "SELECT COUNT(*) FROM sessions WHERE started_at >= ?",
+        (week_ago,)
+    ).fetchone()[0]
+
+    con.close()
+
+    print(f"=== lstack analytics ===")
+    print(f"")
+    print(f"Sessions this week:     {sessions_week}")
+    print(f"Total observations:     {total}")
+    print(f"  This project:         {proj_count}")
+    print(f"  Global:               {global_count}")
+    print(f"")
+    print(f"Observations per week (newest first):")
+    for label, count in weeks:
+        bar = '█' * count + '░' * max(0, 10 - count)
+        print(f"  {label}:  {bar[:10]} {count}")
+    print(f"")
+    if top_tags:
+        print(f"Top tags:")
+        for tag, count in top_tags:
+            print(f"  {tag:<20} {count}")
+    else:
+        print(f"Top tags: (none yet)")
+
+
 def cmd_forget(args):
     query = args.query
     con = connect()
@@ -439,8 +744,6 @@ def cmd_forget(args):
 
 def cmd_prune(args):
     days = args.days or 90
-    cutoff = datetime.now(timezone.utc)
-    # Simple date math: subtract days
     import time
     cutoff_str = datetime.fromtimestamp(
         time.time() - days * 86400, tz=timezone.utc
@@ -489,9 +792,11 @@ def main():
     p = sub.add_parser("search")
     p.add_argument("query")
     p.add_argument("--project", default=None)
-    p.add_argument("--limit", type=int, default=2)
+    p.add_argument("--limit", type=int, default=5)
 
     sub.add_parser("stats")
+    sub.add_parser("analytics")
+    sub.add_parser("embed-all")
 
     p = sub.add_parser("prune")
     p.add_argument("--days", type=int, default=90)
@@ -514,6 +819,8 @@ def main():
         "observe": cmd_observe,
         "search": cmd_search,
         "stats": cmd_stats,
+        "analytics": cmd_analytics,
+        "embed-all": cmd_embed_all,
         "prune": cmd_prune,
         "forget": cmd_forget,
         "edit": cmd_edit,

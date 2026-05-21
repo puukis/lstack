@@ -45,6 +45,28 @@ fi
 
 iso="$(iso_now)"
 
+notify_session_end() {
+    local msg="${1:-Session complete}"
+    case "${OS}" in
+        macos)
+            osascript -e "display notification \"${msg}\" with title \"lstack\"" \
+                2>/dev/null || true
+            ;;
+        windows)
+            powershell.exe -Command "
+Add-Type -AssemblyName System.Windows.Forms
+\$balloon = New-Object System.Windows.Forms.NotifyIcon
+\$balloon.Icon = [System.Drawing.SystemIcons]::Information
+\$balloon.Visible = \$true
+\$balloon.ShowBalloonTip(3000, 'lstack', '${msg}', [System.Windows.Forms.ToolTipIcon]::Info)
+" 2>/dev/null || true
+            ;;
+        linux)
+            notify-send "lstack" "${msg}" 2>/dev/null || true
+            ;;
+    esac
+}
+
 run_learning_extraction() {
     local transcript_path
     transcript_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
@@ -142,6 +164,7 @@ except: print('')
 if [ -z "${test_cmd}" ]; then
     printf '[%s] STOP no-test-cmd found\n' "${iso}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
     run_learning_extraction
+    notify_session_end "Session ended — memory updated"
     exit 0
 fi
 
@@ -152,11 +175,13 @@ if [ "${test_rc}" -eq 0 ]; then
     printf '[%s] STOP tests-passed cmd="%s"\n' "${iso}" "${test_cmd}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
 
     run_learning_extraction
+    notify_session_end "Session ended — memory updated"
 
     exit 0
 else
     printf '[%s] STOP tests-failed cmd="%s" rc=%d\n' "${iso}" "${test_cmd}" "${test_rc}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
     last_lines="$(printf '%s' "${test_output}" | tail -20)"
+    notify_session_end "Tests failed — session blocked"
     printf 'Tests failed. Fix before finishing:\n%s' "${last_lines}"
     exit 2
 fi

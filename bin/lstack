@@ -27,6 +27,9 @@ Commands:
   publish           Package lstack for open-source sharing
   forget [query]    Delete matching observations from persistent memory
   edit [query]      Search and interactively edit an observation
+  analytics         Show memory analytics — observations per week, top tags, scope breakdown
+  mcp               Start lstack MCP server (stdio transport)
+  memory embed-all  Backfill semantic embeddings for all observations
   help              Show this message
 EOF
 }
@@ -145,6 +148,10 @@ cmd_memory() {
             source "${CLAUDE_DIR}/scripts/os.sh"
             "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" prune "$@"
             ;;
+        embed-all)
+            source "${CLAUDE_DIR}/scripts/os.sh"
+            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" embed-all
+            ;;
         "")
             local editor="${EDITOR:-nano}"
             local target
@@ -160,7 +167,7 @@ cmd_memory() {
             ;;
         *)
             echo "Unknown memory subcommand: ${subcmd}"
-            echo "Usage: lstack memory [stats|prune [--days N]]"
+            echo "Usage: lstack memory [stats|prune [--days N]|embed-all]"
             exit 1
             ;;
     esac
@@ -880,6 +887,19 @@ except: print('')
     echo "Updated observation ${edit_id}."
 }
 
+cmd_analytics() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" analytics
+}
+
+cmd_mcp() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    echo "Starting lstack MCP server (stdio)..."
+    echo "To register with Claude Code:"
+    echo "  claude mcp add lstack -- python3 ${CLAUDE_DIR}/scripts/mcp_server.py"
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/mcp_server.py"
+}
+
 cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
@@ -907,6 +927,8 @@ case "${cmd}" in
     publish)   cmd_publish "$@" ;;
     forget)    cmd_forget "$@" ;;
     edit)      cmd_edit "$@" ;;
+    analytics) cmd_analytics "$@" ;;
+    mcp)       cmd_mcp "$@" ;;
     help|--help|-h) usage ;;
     *)
         echo "Unknown command: ${cmd}"

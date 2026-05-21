@@ -193,8 +193,23 @@ except: print('')
                 _mem_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
                 _mem_project="$(to_native_path "${_mem_project_raw}" 2>/dev/null || echo "${_mem_project_raw}")"
                 _mem_project="${_mem_project//\\//}"
+
+                # Build a richer semantic query from actual tool context
+                _sem_query="$(printf '%s' "${input}" | "${PYTHON}" -c "
+import sys,json
+try:
+  d=json.loads(sys.stdin.read())
+  ti=d.get('tool_input',{})
+  parts=[]
+  if ti.get('file_path'): parts.append(ti['file_path'])
+  if ti.get('command'): parts.append(ti['command'][:100])
+  print(' '.join(parts)[:200])
+except: print('')
+" 2>/dev/null || echo '')"
+
                 _mem_results="$("${PYTHON}" "${DB_PY}" search \
-                    "${_mem_keywords}" --project "${_mem_project}" --limit 2 2>/dev/null || echo '[]')"
+                    "${_sem_query:-${_mem_keywords}}" \
+                    --project "${_mem_project}" --limit 3 2>/dev/null || echo '[]')"
 
                 _mem_count="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
 import sys,json
