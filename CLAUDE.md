@@ -22,6 +22,8 @@ On-demand only. Never preload. Invoke via slash command.
 /interrogate  — run before any large or vague request; extracts real requirements
 /blueprint    — generate .blueprint.md spec before any implementation
 /debrief      — end-of-session reflection: what worked, what broke, what to change next time
+/recall       — search, browse, and manage persistent memory; find past observations
+/analytics    — show memory analytics: observations per week, top tags, scope breakdown
 
 ## Intent detection
 Auto-activate /interrogate when: request is a feature/system/workflow (not a bug/edit), missing who/success/constraints, and estimated work >30 min.
@@ -29,6 +31,7 @@ Auto-activate /blueprint when: requirements are clear, no .blueprint.md exists, 
 Auto-activate /reviewer when: user says "review", "check this", "LGTM?", or mentions a PR/diff.
 Auto-activate /debug when: user describes a bug, error, or unexpected behavior, or message contains a stack trace.
 Auto-activate /security when: user mentions auth/login/token/password/API key/deploy/production AND asks for a review or check.
+Auto-activate /recall when: user asks "what do you know", "do you remember", "what's in memory", or "what did we figure out".
 Rules: fires once per topic; never auto-activate /ship, /parallel, or /forget; announce briefly then proceed without asking permission.
 
 ## Rules
@@ -40,11 +43,9 @@ QUALITY: Never stop without tests passing (stop hook enforces this).
 SCOPE: Do not refactor, add features, or create abstractions beyond the task.
 COMMENTS: Default to no comments. Only add when WHY is non-obvious.
 SECURITY: No command injection, XSS, SQL injection, or OWASP top 10 issues.
-TOKEN: Never re-read a file already read this session unless context was compacted. (pre-tool.sh warns; respect the warning.)
-TOKEN: Never spawn a claude -p subprocess inside a hook unless it is the PreCompact or Stop hook. Other hooks must complete without API calls.
-TOKEN: When using /parallel, spawn at most 3 agents. Each agent's context must fit in under 10,000 tokens. If the task requires more, break it down first.
-TOKEN: Never read an entire large file when you only need a section. Use Bash with grep, sed, or awk to extract the relevant lines first.
-TOKEN: When asked to understand a codebase, read the directory structure and key entrypoints only. Ask which files matter before reading everything.
+MEMORY: When /remember fires, always ask scope (project vs global) via AskUserQuestion before storing. Never default silently.
+TOKEN: Never re-read files already in session context. Never spawn claude -p subprocesses in hooks (except PreCompact and Stop).
+TOKEN: Use grep/sed/awk for large files. Read directory structure first, not entire codebases.
 
 ## Memory
 When the SessionStart hook injects "persistent memory (past sessions)",

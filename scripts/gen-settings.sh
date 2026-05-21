@@ -20,9 +20,12 @@ if [ "$OS" = "windows" ]; then
     TOKEN_BUDGET="wsl bash ${WIN_CLAUDE}/scripts/token-budget.sh"
     WIN_USER=$(cmd.exe /c echo %USERNAME% 2>/dev/null | tr -d '\r')
     STATUS_LINE="python C:\\\\Users\\\\${WIN_USER}\\\\.claude\\\\scripts\\\\statusline.py"
+    CLAUDE_DIR="${WIN_CLAUDE}"
+    MCP_PYTHON="python"
 else
     # macOS / Linux: direct bash paths
     CLAUDE_DIR="${HOME}/.claude"
+    MCP_PYTHON="python3"
     SESSION_START="bash ${CLAUDE_DIR}/hooks/session-start.sh"
     PRE_TOOL="bash ${CLAUDE_DIR}/hooks/pre-tool.sh"
     POST_TOOL="bash ${CLAUDE_DIR}/hooks/post-tool.sh"
@@ -155,6 +158,11 @@ cat <<JSON
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"],
+      "scope": "user"
+    },
+    "lstack": {
+      "command": "${MCP_PYTHON}",
+      "args": ["${CLAUDE_DIR}/scripts/mcp_server.py"],
       "scope": "user"
     }
   }

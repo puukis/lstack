@@ -6,6 +6,18 @@ Format follows Keep a Changelog. Versions follow Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Semantic vector search via sqlite-vec and all-MiniLM-L6-v2 (falls back to FTS5)
+- Global vs project memory scoping in /remember skill
+- lstack MCP server exposing memory as Claude Code tools (memory_search, memory_store, memory_stats)
+- AskUserQuestion scope selection in /remember
+- Observation editing in /recall and db.py edit subcommand
+- Session end desktop notifications (macOS, Windows, Linux)
+- Session analytics command (lstack analytics, db.py analytics)
+- Debrief injection at session start (injects last debrief if under 7 days old)
+- /recall skill: search, browse, and manage persistent memory
+- Smarter mid-session injection using semantic query from file path + command context
+- memory/MEMORY.md gitignored, template added for clean installs
+- lstack memory embed-all: backfill semantic embeddings for existing observations
 - /interrogate skill: Socratic one-question-at-a-time requirement clarification
 - /blueprint skill: spec-file generator (.blueprint.md) before implementation
 - /forget skill: delete matching observations from persistent memory

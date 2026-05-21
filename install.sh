@@ -194,7 +194,7 @@ ui_kv() {
     fi
 }
 
-STAGE_TOTAL=8
+STAGE_TOTAL=9
 STAGE_CUR=0
 
 ui_stage() {
@@ -670,6 +670,19 @@ if [ -n "${_py_path}" ]; then
 else
     ui_warn "python3 not found — DB init skipped"
     ui_info "Fix: install Python 3, then run: python3 ~/.claude/scripts/db.py init"
+fi
+
+# ─── Step 7b: MCP registration ────────────────────────────────────────────────
+
+ui_stage "Registering lstack MCP server"
+
+if command -v claude &>/dev/null; then
+    claude mcp add lstack -- python3 "${CLAUDE_DIR}/scripts/mcp_server.py" \
+        2>/dev/null && ui_success "lstack MCP registered" \
+        || ui_warn "MCP registration failed — run: claude mcp add lstack"
+else
+    ui_info "claude CLI not found — skipping MCP registration"
+    ui_info "After installing Claude Code, run: lstack mcp"
 fi
 
 # ─── Add lstack to PATH ───────────────────────────────────────────────────────

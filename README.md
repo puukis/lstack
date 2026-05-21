@@ -57,6 +57,10 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | Spec-first development           | —          | —      | yes         | yes    |
 | Windows (Git Bash)               | —          | —      | —           | yes    |
 | No daemon / no runtime           | yes        | yes    | yes         | yes    |
+| Semantic vector search           | —          | —      | —           | yes    |
+| MCP server (local stdio)         | —          | —      | —           | yes    |
+| Session end notifications        | —          | —      | —           | yes    |
+| Session analytics                | —          | —      | —           | yes    |
 
 ---
 
@@ -80,6 +84,8 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | /remember      | explicitly invoked                           | stores a finding in persistent memory                          |
 | /forget        | explicitly invoked                           | deletes matching observations from memory                      |
 | /debrief       | explicitly invoked                           | end-of-session reflection written to disk in under 300 words   |
+| /recall        | "what do you know", "do you remember"        | search, browse, and manage persistent memory observations      |
+| /analytics     | explicitly invoked                           | memory analytics: observations per week, top tags, scope       |
 
 ---
 
@@ -98,23 +104,41 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 
 ## Memory
 
-lstack uses SQLite with FTS5 full-text search for persistent memory.
+lstack v2 uses semantic vector search (sqlite-vec + all-MiniLM-L6-v2) when available, falling back to FTS5 keyword search. Embeddings are stored in the same SQLite database — no external service required. The model (~80MB) downloads once on first use and runs fully offline.
 
 DB location: `~/.claude/memory/lstack.db`
 
 Automatic injection points:
 
-- **Session start**: recent observations for the current project are injected before the first message.
-- **Mid-session**: when Claude reads a file or runs a command, relevant past context is retrieved and injected before the tool executes. Rate-limited to one injection per 15 tool calls.
-- **Session end**: Stop hook extracts up to 3 learnings and stores them as observations automatically.
+- **Session start**: recent observations for the current project are injected before the first message. Last session debrief (if under 7 days old) is also injected.
+- **Mid-session**: when Claude reads a file or runs a command, relevant past context is retrieved via semantic search and injected before the tool executes. Rate-limited to one injection per 15 tool calls.
+- **Session end**: Stop hook extracts up to 3 learnings and stores them as observations automatically. A desktop notification fires on session end.
 
 Manual controls:
 
     lstack search "jwt auth"
     lstack memory stats
     lstack memory prune --days 90
+    lstack memory embed-all   # backfill semantic embeddings
+    lstack analytics          # observations per week, top tags
 
-From inside Claude Code, use `/remember` to store a finding mid-session, or `/forget` to delete matching observations.
+From inside Claude Code, use `/remember` to store a finding mid-session, `/recall` to search memory, or `/forget` to delete matching observations.
+
+---
+
+## MCP Server
+
+lstack exposes its memory as a local MCP server via stdio transport. Any tool with MCP support can query and store observations.
+
+Enable by running `lstack settings` (registers automatically), or manually:
+
+    claude mcp add lstack -- python3 ~/.claude/scripts/mcp_server.py
+
+Or start interactively:
+
+    lstack mcp
+
+Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 
 ---
 
@@ -135,6 +159,9 @@ From inside Claude Code, use `/remember` to store a finding mid-session, or `/fo
 | lstack clean          | Prune logs and dead loop state files             |
 | lstack upgrade        | Pull latest lstack from git                      |
 | lstack publish        | Package lstack for sharing (strips personal data)|
+| lstack analytics      | Memory analytics: observations per week, top tags|
+| lstack mcp            | Start lstack MCP server (stdio transport)        |
+| lstack memory embed-all | Backfill semantic embeddings for all observations|
 
 ---
 
