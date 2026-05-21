@@ -256,7 +256,7 @@ def cmd_search(args):
         if fts:
             if project:
                 rows = con.execute(
-                    """SELECT o.content, o.project, o.created_at, o.tags
+                    """SELECT o.id, o.content, o.project, o.created_at, o.tags
                        FROM observations_fts f
                        JOIN observations o ON o.id = f.rowid
                        WHERE observations_fts MATCH ?
@@ -266,7 +266,7 @@ def cmd_search(args):
                 ).fetchall()
             else:
                 rows = con.execute(
-                    """SELECT o.content, o.project, o.created_at, o.tags
+                    """SELECT o.id, o.content, o.project, o.created_at, o.tags
                        FROM observations_fts f
                        JOIN observations o ON o.id = f.rowid
                        WHERE observations_fts MATCH ?
@@ -282,7 +282,7 @@ def cmd_search(args):
                 like = f"%{kw}%"
                 if project:
                     rows = con.execute(
-                        "SELECT content, project, created_at, tags FROM observations "
+                        "SELECT id, content, project, created_at, tags FROM observations "
                         "WHERE (content LIKE ? OR tags LIKE ?) "
                         "AND (project = ? OR project = 'global') "
                         "ORDER BY created_at DESC LIMIT ?",
@@ -290,7 +290,7 @@ def cmd_search(args):
                     ).fetchall()
                 else:
                     rows = con.execute(
-                        "SELECT content, project, created_at, tags FROM observations "
+                        "SELECT id, content, project, created_at, tags FROM observations "
                         "WHERE content LIKE ? OR tags LIKE ? "
                         "ORDER BY created_at DESC LIMIT ?",
                         (like, like, limit)
@@ -298,8 +298,9 @@ def cmd_search(args):
             else:
                 rows = []
 
-        for content, proj, created_at, tags in rows:
+        for row_id, content, proj, created_at, tags in rows:
             results.append({
+                "id": row_id,
                 "content": content,
                 "project": proj,
                 "created_at": created_at,
@@ -310,6 +311,52 @@ def cmd_search(args):
 
     con.close()
     print(json.dumps(results))
+
+
+def cmd_edit(args):
+    con = connect()
+    init_db(con)
+    fts = has_fts5(con)
+
+    row = con.execute(
+        "SELECT id, content, tags, project FROM observations WHERE id = ?",
+        (args.id,)
+    ).fetchone()
+
+    if not row:
+        print(json.dumps({"error": f"No observation with id {args.id}"}))
+        con.close()
+        return
+
+    obs_id, content, tags, project = row
+
+    new_content = args.content if args.content is not None else content
+    new_tags = args.tags if args.tags is not None else tags
+    new_project = args.project if args.project is not None else project
+
+    if new_project and new_project != "global":
+        new_project = normalize_project(new_project)
+
+    con.execute(
+        "UPDATE observations SET content = ?, tags = ?, project = ? WHERE id = ?",
+        (new_content, new_tags, new_project, obs_id)
+    )
+    con.commit()
+
+    if fts:
+        try:
+            con.execute("INSERT INTO observations_fts(observations_fts) VALUES ('rebuild')")
+            con.commit()
+        except Exception:
+            pass
+
+    con.close()
+    print(json.dumps({
+        "edited": obs_id,
+        "content": new_content,
+        "tags": new_tags,
+        "project": new_project,
+    }))
 
 
 def cmd_stats(args):
@@ -452,6 +499,12 @@ def main():
     p = sub.add_parser("forget")
     p.add_argument("query", help="Search term to match observations for deletion")
 
+    p = sub.add_parser("edit")
+    p.add_argument("id", type=int, help="Observation ID to edit")
+    p.add_argument("--content", default=None, help="New content")
+    p.add_argument("--tags", default=None, help="New tags (comma-separated)")
+    p.add_argument("--project", default=None, help="New project path or 'global'")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -463,6 +516,7 @@ def main():
         "stats": cmd_stats,
         "prune": cmd_prune,
         "forget": cmd_forget,
+        "edit": cmd_edit,
     }
 
     if args.cmd in dispatch:

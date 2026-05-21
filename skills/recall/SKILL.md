@@ -42,6 +42,47 @@ CORRECT — fix a wrong observation:
     3. Delete it: python $DB_PY forget "[query]"
     4. Store the corrected version: /remember
 
+EDIT — modify an existing observation in place:
+    1. Search for the observation to edit:
+           python3 ~/.claude/scripts/db.py search "[query]" --limit 5
+       Results include an ID for each observation.
+    2. Show results to the user and ask which one to edit.
+       Use AskUserQuestion with the observations as options.
+    3. Ask the user what to change using AskUserQuestion:
+           AskUserQuestion({
+             questions: [{
+               question: "What do you want to edit?",
+               options: [
+                 "Content (the text)",
+                 "Tags",
+                 "Scope (project ↔ global)",
+                 "Multiple fields"
+               ]
+             }]
+           })
+    4. For each field being edited, ask for the new value.
+       For scope changes, use AskUserQuestion:
+           AskUserQuestion({
+             questions: [{
+               question: "Change scope to:",
+               options: [
+                 "Project — this project only",
+                 "Global — inject in every project"
+               ]
+             }]
+           })
+    5. Show a preview of what will change:
+           Current: [old content / tags / scope]
+           New:     [new content / tags / scope]
+       Ask for confirmation before applying.
+    6. Apply the edit:
+           python3 ~/.claude/scripts/db.py edit [id] \
+             --content "[new content]" \
+             --tags "[new tags]" \
+             --project "[new project or 'global']"
+       Only pass flags for fields that actually changed.
+    7. Confirm: "Updated observation [id]: [new content]"
+
 LIST BY TAG — find observations with a specific tag:
     Bash: python $DB_PY search "[tag]" --limit 10
     Tags are comma-separated keywords stored with each observation.
@@ -52,6 +93,7 @@ LIST BY TAG — find observations with a specific tag:
    - "What do you remember about this project?" → RECENT
    - "How much is stored?" → STATS
    - "Something stored is wrong" → CORRECT
+   - "Edit / update / change a memory" → EDIT
 2. Run the appropriate command.
 3. Present results clearly. If nothing found, say so directly.
 4. Offer the next logical action:
@@ -69,9 +111,9 @@ LIST BY TAG — find observations with a specific tag:
 
 ## Output format
 Numbered list for search results:
-  [1] 2026-05-17  [project]  prefer bun install over npm install — bun is faster
+  [1] id=42  2026-05-17  [project]  prefer bun install over npm install — bun is faster
        tags: bun, npm, install
-  [2] 2026-05-17  [global]   SessionStart hook requires hookSpecificOutput wrapper
+  [2] id=7   2026-05-17  [global]   SessionStart hook requires hookSpecificOutput wrapper
        tags: hook, session, wrapper
 
 Plain text for stats output.

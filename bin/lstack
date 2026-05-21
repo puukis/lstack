@@ -26,6 +26,7 @@ Commands:
   upgrade           Pull latest lstack from git origin
   publish           Package lstack for open-source sharing
   forget [query]    Delete matching observations from persistent memory
+  edit [query]      Search and interactively edit an observation
   help              Show this message
 EOF
 }
@@ -790,6 +791,95 @@ except: print(0)
     echo "Deleted ${deleted} observation(s)."
 }
 
+cmd_edit() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local query="$*"
+    if [ -z "${query}" ]; then
+        echo "Usage: lstack edit [search terms]"
+        echo "Searches for matching observations, then prompts you to edit one."
+        exit 1
+    fi
+
+    results="$("${PYTHON}" "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
+    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try: print(len(json.load(sys.stdin)))
+except: print(0)
+" 2>/dev/null || echo 0)"
+
+    if [ "${count}" -eq 0 ]; then
+        echo "No observations matched '${query}'"
+        exit 0
+    fi
+
+    echo "Matching observations:"
+    printf '%s' "${results}" | "${PYTHON}" -c "
+import sys,json
+try:
+    for i,it in enumerate(json.load(sys.stdin),1):
+        oid=it.get('id','?')
+        date=(it.get('created_at',''))[:10]
+        scope='global' if it.get('project')=='global' else 'project'
+        tags=it.get('tags','')
+        print(f'  [{i}] id={oid}  {date}  [{scope}]  {it[\"content\"][:70]}')
+        if tags:
+            print(f'       tags: {tags}')
+except Exception as e:
+    print(f'Error: {e}')
+"
+
+    echo ""
+    printf "Observation ID to edit: "
+    read -r edit_id
+    if [ -z "${edit_id}" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    printf "Field to edit [content/tags/scope]: "
+    read -r field
+
+    case "${field}" in
+        content)
+            printf "New content: "
+            read -r new_val
+            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --content "${new_val}" 2>/dev/null)"
+            ;;
+        tags)
+            printf "New tags (comma-separated): "
+            read -r new_val
+            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --tags "${new_val}" 2>/dev/null)"
+            ;;
+        scope)
+            printf "New scope [project/global]: "
+            read -r new_scope
+            if [ "${new_scope}" = "global" ]; then
+                new_project="global"
+            else
+                new_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+            fi
+            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --project "${new_project}" 2>/dev/null)"
+            ;;
+        *)
+            echo "Unknown field '${field}'. Use: content, tags, or scope"
+            exit 1
+            ;;
+    esac
+
+    err="$(printf '%s' "${result}" | "${PYTHON}" -c "
+import sys,json
+try: print(json.load(sys.stdin).get('error',''))
+except: print('')
+" 2>/dev/null)"
+
+    if [ -n "${err}" ]; then
+        echo "Error: ${err}"
+        exit 1
+    fi
+
+    echo "Updated observation ${edit_id}."
+}
+
 cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
@@ -816,6 +906,7 @@ case "${cmd}" in
     upgrade)   cmd_upgrade "$@" ;;
     publish)   cmd_publish "$@" ;;
     forget)    cmd_forget "$@" ;;
+    edit)      cmd_edit "$@" ;;
     help|--help|-h) usage ;;
     *)
         echo "Unknown command: ${cmd}"
