@@ -618,6 +618,12 @@ def cmd_stats(args):
 
 def cmd_analytics(args):
     """Show session and memory analytics."""
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        try:
+            _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     project = normalize_project(get_project())
     con = connect()
     init_db(con)
@@ -679,7 +685,7 @@ def cmd_analytics(args):
     print(f"")
     print(f"Observations per week (newest first):")
     for label, count in weeks:
-        bar = '█' * count + '░' * max(0, 10 - count)
+        bar = '#' * count + '-' * max(0, 10 - count)
         print(f"  {label}:  {bar[:10]} {count}")
     print(f"")
     if top_tags:

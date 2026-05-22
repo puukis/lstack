@@ -10,15 +10,14 @@ if [ "$OS" = "windows" ]; then
     # Windows: wrap every hook command with wsl
     # ~ in WSL resolves to /home/$USER (Linux home), not C:\Users\..\.claude
     # Use wslpath to get the correct /mnt/c/... path for files under Windows home
-    WIN_CLAUDE=$(wslpath -u "$(cmd.exe /c echo %USERPROFILE% 2>/dev/null | tr -d '\r')/.claude" 2>/dev/null \
-        || echo "/mnt/c/Users/$USER/.claude")
-    SESSION_START="wsl bash ${WIN_CLAUDE}/hooks/session-start.sh"
-    PRE_TOOL="wsl bash ${WIN_CLAUDE}/hooks/pre-tool.sh"
-    POST_TOOL="wsl bash ${WIN_CLAUDE}/hooks/post-tool.sh"
-    PRE_COMPACT="wsl bash ${WIN_CLAUDE}/hooks/pre-compact.sh"
-    STOP="wsl bash ${WIN_CLAUDE}/hooks/stop.sh"
-    TOKEN_BUDGET="wsl bash ${WIN_CLAUDE}/scripts/token-budget.sh"
-    WIN_USER=$(cmd.exe /c echo %USERNAME% 2>/dev/null | tr -d '\r')
+    WIN_CLAUDE="${HOME}/.claude"
+    SESSION_START="bash ${WIN_CLAUDE}/hooks/session-start.sh"
+    PRE_TOOL="bash ${WIN_CLAUDE}/hooks/pre-tool.sh"
+    POST_TOOL="bash ${WIN_CLAUDE}/hooks/post-tool.sh"
+    PRE_COMPACT="bash ${WIN_CLAUDE}/hooks/pre-compact.sh"
+    STOP="bash ${WIN_CLAUDE}/hooks/stop.sh"
+    TOKEN_BUDGET="bash ${WIN_CLAUDE}/scripts/token-budget.sh"
+    WIN_USER="${USERNAME:-Leo}"
     STATUS_LINE="python C:\\\\Users\\\\${WIN_USER}\\\\.claude\\\\scripts\\\\statusline.py"
     CLAUDE_DIR="${WIN_CLAUDE}"
     MCP_PYTHON="python"

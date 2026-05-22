@@ -263,7 +263,6 @@ cmd_memory() {
             ;;
         list)
             source "${CLAUDE_DIR}/scripts/os.sh"
-            shift
             "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" list "$@"
             ;;
         "")

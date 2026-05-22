@@ -14,7 +14,9 @@ mkdir -p "${LOG_DIR}"
 input="$(cat)"
 
 # Parse tool_name and tool_input via python3
-parsed="$(printf '%s' "${input}" | "${PYTHON}" - <<'PYEOF'
+# Write script to temp file: Git Bash pipe+heredoc overwrites stdin, breaking json parse
+_py_tmp_parse="$(mktemp /tmp/lstack-pretool-XXXXXX.py)"
+cat > "${_py_tmp_parse}" <<'PYEOF'
 import sys, json, hashlib, os
 
 data = {}
@@ -39,7 +41,8 @@ print(tool_name)
 print(h)
 print(bash_cmd)
 PYEOF
-)" 2>/dev/null || true
+parsed="$(printf '%s' "${input}" | "${PYTHON}" "${_py_tmp_parse}" 2>/dev/null)" || true
+rm -f "${_py_tmp_parse}"
 
 tool_name="$(printf '%s' "${parsed}" | sed -n '1p')"
 input_hash="$(printf '%s' "${parsed}" | sed -n '2p')"
