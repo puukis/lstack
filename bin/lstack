@@ -17,6 +17,9 @@ Commands:
   onboard           Interactive first-run setup
   memory            Open project or global MEMORY.md in \$EDITOR
   memory stats      Show persistent DB stats
+  memory list           List all observations (current project + global)
+  memory list --global  List only global observations
+  memory list --tag X   Filter by tag
   memory prune [--days N]  Delete observations older than N days (default 90)
   search [query]    Search persistent memory for [query]
   logs              Tail tool-calls.log with color
@@ -30,6 +33,7 @@ Commands:
   analytics         Show memory analytics — observations per week, top tags, scope breakdown
   mcp               Start lstack MCP server (stdio transport)
   memory embed-all  Backfill semantic embeddings for all observations
+  sync              Sync memory to/from a private git repo (cross-device)
   help              Show this message
 EOF
 }
@@ -45,20 +49,125 @@ cmd_init() {
 
     echo "Initializing lstack project in ${project_dir}..."
 
-    # Collect project info
-    printf 'Project name: '
+    # Auto-detect project context
+    echo "Scanning project..."
+
+    detected_stack=""
+    detected_test=""
+    detected_dev=""
+    detected_build=""
+    detected_lint=""
+    detected_name="$(basename "$(pwd)")"
+
+    # Node / TypeScript
+    if [ -f "package.json" ]; then
+        pkg_name="$("${PYTHON}" -c "
+import json
+try:
+  d=json.load(open('package.json'))
+  print(d.get('name',''))
+except: print('')
+" 2>/dev/null)"
+        [ -n "${pkg_name}" ] && detected_name="${pkg_name}"
+
+        detected_test="$("${PYTHON}" -c "
+import json
+try:
+  s=json.load(open('package.json')).get('scripts',{})
+  for k in ['test','jest','vitest']:
+      if k in s: print(f'npm test'); break
+  else: print('')
+except: print('')
+" 2>/dev/null)"
+        detected_dev="$("${PYTHON}" -c "
+import json
+try:
+  s=json.load(open('package.json')).get('scripts',{})
+  for k in ['dev','start','serve']:
+      if k in s: print(f'npm run {k}'); break
+except: print('')
+" 2>/dev/null)"
+        detected_build="$("${PYTHON}" -c "
+import json
+try:
+  s=json.load(open('package.json')).get('scripts',{})
+  if 'build' in s: print('npm run build')
+except: print('')
+" 2>/dev/null)"
+
+        if [ -f "tsconfig.json" ]; then
+            detected_stack="TypeScript/Node"
+        else
+            detected_stack="JavaScript/Node"
+        fi
+        if [ -f "next.config.js" ] || [ -f "next.config.ts" ]; then
+            detected_stack="TypeScript/Next.js"
+        elif grep -q '"react"' package.json 2>/dev/null; then
+            detected_stack="TypeScript/React"
+        fi
+        if [ -f ".eslintrc.json" ] || [ -f ".eslintrc.js" ] || [ -f "eslint.config.js" ]; then
+            detected_lint="npm run lint"
+        fi
+    fi
+
+    # Python
+    if [ -f "pyproject.toml" ] || [ -f "setup.py" ] || [ -f "requirements.txt" ]; then
+        detected_stack="Python"
+        if [ -f "pyproject.toml" ]; then
+            detected_test="pytest"
+            detected_lint="ruff check ."
+        fi
+        if grep -q "fastapi" requirements.txt 2>/dev/null || \
+           grep -q "fastapi" pyproject.toml 2>/dev/null; then
+            detected_stack="Python/FastAPI"
+            detected_dev="uvicorn main:app --reload"
+        fi
+    fi
+
+    # Go
+    if [ -f "go.mod" ]; then
+        detected_stack="Go"
+        detected_test="go test ./..."
+        detected_build="go build ./..."
+        detected_lint="golangci-lint run"
+        detected_name="$(head -1 go.mod | awk '{print $2}' | xargs basename 2>/dev/null || echo "${detected_name}")"
+    fi
+
+    # Rust
+    if [ -f "Cargo.toml" ]; then
+        detected_stack="Rust"
+        detected_test="cargo test"
+        detected_build="cargo build --release"
+        detected_lint="cargo clippy"
+    fi
+
+    printf '\nDetected project info (press Enter to accept, or type to override):\n\n'
+
+    printf "Project name [${detected_name}]: "
     read -r project_name
-    printf 'Tech stack (e.g. TypeScript/Node, Python/FastAPI): '
+    project_name="${project_name:-${detected_name}}"
+
+    printf "Tech stack [${detected_stack:-unknown}]: "
     read -r project_stack
-    printf 'Test command (e.g. npm test, pytest): '
+    project_stack="${project_stack:-${detected_stack}}"
+
+    printf "Test command [${detected_test:-none}]: "
     read -r test_cmd
-    printf 'Dev command (e.g. npm run dev): '
+    test_cmd="${test_cmd:-${detected_test}}"
+
+    printf "Dev command [${detected_dev:-none}]: "
     read -r dev_cmd
-    printf 'Build command (e.g. npm run build): '
+    dev_cmd="${dev_cmd:-${detected_dev}}"
+
+    printf "Build command [${detected_build:-none}]: "
     read -r build_cmd
-    printf 'Lint command (e.g. npm run lint): '
+    build_cmd="${build_cmd:-${detected_build}}"
+
+    printf "Lint command [${detected_lint:-none}]: "
     read -r lint_cmd
-    printf 'Purpose (one line): '
+    lint_cmd="${lint_cmd:-${detected_lint}}"
+
+    printf "Purpose (one line): "
     read -r purpose
 
     # Create directories
@@ -151,6 +260,11 @@ cmd_memory() {
         embed-all)
             source "${CLAUDE_DIR}/scripts/os.sh"
             "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" embed-all
+            ;;
+        list)
+            source "${CLAUDE_DIR}/scripts/os.sh"
+            shift
+            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" list "$@"
             ;;
         "")
             local editor="${EDITOR:-nano}"
@@ -343,6 +457,18 @@ cmd_clean() {
         fi
     done
     echo "  Removed ${reads_count} reads state file(s) for dead PIDs"
+
+    # Remove semantic loop state files for dead PIDs
+    errloop_count=0
+    for f in "${log_dir}"/errloop-*.json; do
+        [ -f "${f}" ] || continue
+        pid="$(basename "${f}" | sed 's/errloop-//;s/\.json//')"
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            rm -f "${f}"
+            errloop_count=$(( errloop_count + 1 ))
+        fi
+    done
+    echo "  Removed ${errloop_count} semantic loop state file(s) for dead PIDs"
 
     # Prune persistent DB observations older than 90 days
     source "${CLAUDE_DIR}/scripts/os.sh"
@@ -728,6 +854,17 @@ PREFEOF
             ;;
     esac
 
+    # Step F — sync repo (optional)
+    printf '\n'
+    printf 'Memory sync across devices (optional).\n'
+    printf 'Enter a private git repo URL for cross-device sync,\n'
+    printf 'or press Enter to skip: '
+    read -r _sync_repo
+    if [ -n "${_sync_repo}" ]; then
+        printf '%s\n' "${_sync_repo}" > "${CLAUDE_DIR}/memory/.sync-repo"
+        printf 'Sync repo saved. Run: lstack sync\n'
+    fi
+
     # Step E — summary
     printf '\n'
     printf 'Onboarding complete. Your setup:\n'
@@ -892,6 +1029,51 @@ cmd_analytics() {
     "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" analytics
 }
 
+cmd_sync() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local sync_repo_file="${CLAUDE_DIR}/memory/.sync-repo"
+    local sync_dir="${CLAUDE_DIR}/memory/sync"
+
+    if [ ! -f "${sync_repo_file}" ]; then
+        echo "No sync repo configured."
+        echo "Run 'lstack onboard' to set one up, or:"
+        echo "  echo 'git@github.com:you/lstack-sync.git' > ~/.claude/memory/.sync-repo"
+        exit 1
+    fi
+
+    local sync_repo
+    sync_repo="$(cat "${sync_repo_file}")"
+
+    if [ ! -d "${sync_dir}/.git" ]; then
+        echo "Cloning sync repo..."
+        git clone "${sync_repo}" "${sync_dir}" || {
+            echo "Clone failed. Check your repo URL and SSH keys."
+            exit 1
+        }
+    fi
+
+    echo "Pulling from sync repo..."
+    git -C "${sync_dir}" pull --ff-only origin main 2>/dev/null || \
+    git -C "${sync_dir}" pull --ff-only origin master 2>/dev/null || true
+
+    if [ -f "${sync_dir}/observations.json" ]; then
+        echo "Importing observations from sync..."
+        "${PYTHON}" "${DB_PY}" import "${sync_dir}/observations.json"
+    fi
+
+    echo "Exporting current observations..."
+    "${PYTHON}" "${DB_PY}" export > "${sync_dir}/observations.json"
+
+    git -C "${sync_dir}" add observations.json
+    if ! git -C "${sync_dir}" diff --cached --quiet; then
+        git -C "${sync_dir}" commit -m "lstack sync $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        git -C "${sync_dir}" push origin HEAD
+        echo "Sync complete."
+    else
+        echo "Nothing new to push."
+    fi
+}
+
 cmd_mcp() {
     source "${CLAUDE_DIR}/scripts/os.sh"
     echo "Starting lstack MCP server (stdio)..."
@@ -929,6 +1111,7 @@ case "${cmd}" in
     edit)      cmd_edit "$@" ;;
     analytics) cmd_analytics "$@" ;;
     mcp)       cmd_mcp "$@" ;;
+    sync)      cmd_sync "$@" ;;
     help|--help|-h) usage ;;
     *)
         echo "Unknown command: ${cmd}"

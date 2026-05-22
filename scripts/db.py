@@ -742,6 +742,104 @@ def cmd_forget(args):
     print(json.dumps({"deleted": len(ids), "removed": deleted_contents}))
 
 
+def cmd_export(args):
+    """Export all observations to JSON for sync."""
+    con = connect()
+    init_db(con)
+    rows = con.execute(
+        "SELECT id, session_id, project, content, tags, created_at "
+        "FROM observations ORDER BY created_at ASC"
+    ).fetchall()
+    con.close()
+    observations = [
+        {
+            "id": r[0], "session_id": r[1], "project": r[2],
+            "content": r[3], "tags": r[4], "created_at": r[5]
+        }
+        for r in rows
+    ]
+    output = {"version": 2, "exported_at": iso_now(),
+              "observations": observations}
+    print(json.dumps(output, indent=2))
+
+
+def cmd_import(args):
+    """Import observations from JSON, skipping duplicates by content+project."""
+    path = args.file
+    with open(path) as f:
+        data = json.load(f)
+    observations = data.get("observations", [])
+    con = connect()
+    init_db(con)
+    imported = 0
+    skipped = 0
+    for obs in observations:
+        exists = con.execute(
+            "SELECT 1 FROM observations WHERE content = ? AND project = ?",
+            (obs["content"], obs["project"])
+        ).fetchone()
+        if exists:
+            skipped += 1
+            continue
+        con.execute(
+            "INSERT INTO observations (session_id, project, content, tags, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (obs.get("session_id", "sync"), obs["project"],
+             obs["content"], obs.get("tags", ""), obs["created_at"])
+        )
+        imported += 1
+    con.commit()
+    con.close()
+    print(f"Imported {imported} observations, skipped {skipped} duplicates.")
+
+
+def cmd_list(args):
+    """List all observations with id, scope, date, content, tags."""
+    project = normalize_project(get_project())
+    con = connect()
+    init_db(con)
+
+    query = "SELECT id, project, created_at, content, tags FROM observations"
+    params = []
+    conditions = []
+
+    if args.global_only:
+        conditions.append("project = 'global'")
+    elif args.project:
+        p = normalize_project(args.project)
+        conditions.append("(project = ? OR project = 'global')")
+        params.append(p)
+    elif not args.all:
+        conditions.append("(project = ? OR project = 'global')")
+        params.append(project)
+
+    if args.tag:
+        conditions.append("tags LIKE ?")
+        params.append(f"%{args.tag}%")
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY created_at DESC"
+
+    if args.limit:
+        query += f" LIMIT {args.limit}"
+
+    rows = con.execute(query, params).fetchall()
+    con.close()
+
+    if not rows:
+        print("No observations found.")
+        return
+
+    for obs_id, proj, created_at, content, tags in rows:
+        scope = "[global] " if proj == "global" else "[project]"
+        date = created_at[:10] if created_at else "?"
+        print(f"{obs_id:>4}  {scope}  {date}  {content[:80]}")
+        if tags:
+            print(f"            tags: {tags}")
+
+
 def cmd_prune(args):
     days = args.days or 90
     import time
@@ -801,6 +899,22 @@ def main():
     p = sub.add_parser("prune")
     p.add_argument("--days", type=int, default=90)
 
+    sub.add_parser("export")
+    p = sub.add_parser("import")
+    p.add_argument("file", help="Path to JSON file to import")
+
+    p = sub.add_parser("list")
+    p.add_argument("--global", dest="global_only", action="store_true",
+                   help="Show only global observations")
+    p.add_argument("--project", default=None,
+                   help="Filter by project path")
+    p.add_argument("--tag", default=None,
+                   help="Filter by tag keyword")
+    p.add_argument("--all", action="store_true",
+                   help="Show all observations across all projects")
+    p.add_argument("--limit", type=int, default=50,
+                   help="Max results (default 50)")
+
     p = sub.add_parser("forget")
     p.add_argument("query", help="Search term to match observations for deletion")
 
@@ -824,6 +938,9 @@ def main():
         "prune": cmd_prune,
         "forget": cmd_forget,
         "edit": cmd_edit,
+        "list": cmd_list,
+        "export": cmd_export,
+        "import": cmd_import,
     }
 
     if args.cmd in dispatch:
