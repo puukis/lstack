@@ -47,6 +47,37 @@ that should survive beyond this conversation.
    python3 ~/.claude/scripts/db.py observe \
      "[session_id]" "[project_or_global]" "[summary]" "[tag1,tag2,tag3]"
 
+6b. If scope is "project" and a .claude/CLAUDE.md exists in the git root:
+    Append the finding to a "## Learned" section at the bottom of that file.
+    Format:
+        - [YYYY-MM-DD] [summary in max 15 words]
+
+    Check if the section exists first:
+        Bash: grep -q "## Learned" .claude/CLAUDE.md && echo "exists" || echo "missing"
+
+    If missing, append:
+        Bash: printf '\n## Learned\n' >> .claude/CLAUDE.md
+
+    Then append the bullet:
+        Bash: printf '- [%s] %s\n' "$(date +%Y-%m-%d)" "[summary]" >> .claude/CLAUDE.md
+
+    Cap at 20 bullets — if over, remove the oldest:
+        Bash: python3 -c "
+import re
+path = '.claude/CLAUDE.md'
+with open(path) as f: content = f.read()
+learned = re.findall(r'^- \[.*$', content, re.MULTILINE)
+if len(learned) > 20:
+    oldest = learned[:-20]
+    for line in oldest:
+        content = content.replace(line + '\n', '', 1)
+    with open(path, 'w') as f: f.write(content)
+"
+
+    Do NOT update ## Learned for global-scoped observations.
+    Do NOT update if .claude/CLAUDE.md does not exist.
+    This is a best-effort step — if any command fails, continue normally.
+
 7. Confirm to the user:
    "Stored [global|project]: [summary]"
 

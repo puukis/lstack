@@ -55,3 +55,7 @@ memory/lstack.db
 memory/lstack.db-shm
 memory/lstack.db-wal
 memory/MEMORY.md
+
+# Sync repo config and working clone
+memory/.sync-repo
+memory/sync/

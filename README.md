@@ -86,6 +86,7 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | /debrief       | explicitly invoked                           | end-of-session reflection written to disk in under 300 words   |
 | /recall        | "what do you know", "do you remember"        | search, browse, and manage persistent memory observations      |
 | /analytics     | explicitly invoked                           | memory analytics: observations per week, top tags, scope       |
+| /changelog     | explicitly invoked                           | generates CHANGELOG.md entry from git log since last tag       |
 
 ---
 

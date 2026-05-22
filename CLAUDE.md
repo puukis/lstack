@@ -24,6 +24,7 @@ On-demand only. Never preload. Invoke via slash command.
 /debrief      — end-of-session reflection: what worked, what broke, what to change next time
 /recall       — search, browse, and manage persistent memory; find past observations
 /analytics    — show memory analytics: observations per week, top tags, scope breakdown
+/changelog    — generate CHANGELOG.md entry from git log since last tag
 
 ## Intent detection
 Auto-activate /interrogate when: request is a feature/system/workflow (not a bug/edit), missing who/success/constraints, and estimated work >30 min.
