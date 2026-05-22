@@ -21,6 +21,10 @@ pct    = int(float((data.get("context_window") or {}).get("used_percentage") or 
 cost   = float((data.get("cost") or {}).get("total_cost_usd") or 0)
 add    = int((data.get("cost") or {}).get("total_lines_added") or 0)
 rem    = int((data.get("cost") or {}).get("total_lines_removed") or 0)
+rate_pct = int(float(
+    ((data.get("rate_limits") or {}).get("five_hour") or {})
+    .get("used_percentage") or 0
+))
 
 try:
     branch = subprocess.check_output(
@@ -37,9 +41,15 @@ C  = color(pct)
 
 branch_seg = f" {D}on{R} {branch}" if branch else ""
 
+rate_seg = ""
+if rate_pct >= 50:
+    R_color = "\033[31m" if rate_pct >= 90 else "\033[33m" if rate_pct >= 70 else "\033[36m"
+    rate_seg = f"  {R_color}rate {rate_pct}%{R}"
+
 print(
     f"{B}{model}{R}{branch_seg}  "
     f"{C}{bar(pct)} {pct}%{R}  "
     f"{D}${cost:.3f}  +{add} -{rem}{R}"
+    f"{rate_seg}"
 )
 sys.exit(0)

@@ -12,6 +12,7 @@ if command -v jq >/dev/null 2>&1; then
   COST=$(echo "$INPUT"  | jq -r '.cost.total_cost_usd // 0' 2>/dev/null | awk '{printf "%.3f",$1}')
   ADD=$(echo "$INPUT"   | jq -r '.cost.total_lines_added // 0' 2>/dev/null)
   DEL=$(echo "$INPUT"   | jq -r '.cost.total_lines_removed // 0' 2>/dev/null)
+  RATE=$(echo "$INPUT"  | jq -r '.rate_limits.five_hour.used_percentage // 0' 2>/dev/null | cut -d. -f1)
 else
   PARSED=$(echo "$INPUT" | python3 -c "
 import sys,json
@@ -21,16 +22,18 @@ try:
   p=int(float(d.get('context_window',{}).get('used_percentage',0)))
   c=float(d.get('cost',{}).get('total_cost_usd',0))
   a=int(d.get('cost',{}).get('total_lines_added',0))
-  r=int(d.get('cost',{}).get('total_lines_removed',0))
-  print(f'{m}|{p}|{c:.3f}|{a}|{r}')
+  r_lines=int(d.get('cost',{}).get('total_lines_removed',0))
+  r=int(float(d.get('rate_limits',{}).get('five_hour',{}).get('used_percentage',0)))
+  print(f'{m}|{p}|{c:.3f}|{a}|{r_lines}|{r}')
 except:
-  print('?|0|0.000|0|0')
-" 2>/dev/null || echo "?|0|0.000|0|0")
+  print('?|0|0.000|0|0|0')
+" 2>/dev/null || echo "?|0|0.000|0|0|0")
   MODEL=$(echo "$PARSED" | cut -d'|' -f1)
   PCT=$(echo "$PARSED"   | cut -d'|' -f2)
   COST=$(echo "$PARSED"  | cut -d'|' -f3)
   ADD=$(echo "$PARSED"   | cut -d'|' -f4)
   DEL=$(echo "$PARSED"   | cut -d'|' -f5)
+  RATE=$(echo "$PARSED"  | cut -d'|' -f6)
 fi
 
 # Defaults if parsing produced empty strings
@@ -39,6 +42,7 @@ PCT=${PCT:-0}
 COST=${COST:-"0.000"}
 ADD=${ADD:-0}
 DEL=${DEL:-0}
+RATE=${RATE:-0}
 
 # Git branch (local only, fast)
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
@@ -60,7 +64,16 @@ B=$'\033[1m'; D=$'\033[2m'; R=$'\033[0m'
 # Branch segment
 [ -n "$BRANCH" ] && BS=" ${D}on${R} ${BRANCH}" || BS=""
 
-printf "${B}%s${R}%s  ${C}%s %s%%${R}  ${D}\$%s  +%s -%s${R}\n" \
-  "$MODEL" "$BS" "$BAR" "$PCT" "$COST" "$ADD" "$DEL"
+# Rate limit segment
+RATE_SEG=""
+if [ "${RATE}" -ge 50 ] 2>/dev/null; then
+    if [ "${RATE}" -ge 90 ] 2>/dev/null; then RC=$'\033[31m'
+    elif [ "${RATE}" -ge 70 ] 2>/dev/null; then RC=$'\033[33m'
+    else RC=$'\033[36m'; fi
+    RATE_SEG="  ${RC}rate ${RATE}%${R}"
+fi
+
+printf "${B}%s${R}%s  ${C}%s %s%%${R}  ${D}\$%s  +%s -%s${R}%s\n" \
+  "$MODEL" "$BS" "$BAR" "$PCT" "$COST" "$ADD" "$DEL" "$RATE_SEG"
 
 exit 0
