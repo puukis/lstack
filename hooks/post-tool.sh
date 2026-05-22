@@ -112,6 +112,29 @@ else
         printf '{"additionalContext": %s}\n' "${escaped}"
     fi
 
+    # MEMORY SIGNAL: check if this is a hook/script/skill edit
+    if printf '%s' "${file_path}" | grep -qE '/(hooks|scripts|skills)/'; then
+        _edit_context="$(printf '%s' "${INPUT}" | "${PYTHON}" -c "
+import sys,json
+try:
+  d=json.load(sys.stdin)
+  ti=d.get('tool_input',{})
+  old=str(ti.get('old_str',''))[:100]
+  new=str(ti.get('new_str',''))[:100]
+  if old and new:
+      print(f'Changed: {old[:50]} → {new[:50]}')
+  else:
+      print(ti.get('file_path',''))
+except: print('')
+" 2>/dev/null || echo '')"
+
+        if [ -n "${_edit_context}" ]; then
+            _edit_msg="You just edited a hook or script (${file_path##*/}). If you discovered a non-obvious bug or platform-specific behavior during this edit, call /remember — it will ask whether to save to project or global memory."
+            _edit_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_edit_msg}" 2>/dev/null)"
+            printf '{"additionalContext": %s}\n' "${_edit_escaped}"
+        fi
+    fi
+
     exit 0
 fi
 
@@ -145,22 +168,40 @@ except: pass
 import sys
 cmd=sys.argv[1].lower()
 resp=sys.argv[2].lower()
-
 signals = []
 
 # Fix confirmed after failure
-if any(w in resp for w in ['passed','success','fixed','resolved','works now','all tests']):
-  if any(w in cmd for w in ['test','fix','patch','debug']):
-    signals.append('fix confirmed')
+if any(w in resp for w in ['passed','success','fixed','resolved',
+                            'works now','all tests','working now']):
+    if any(w in cmd for w in ['test','fix','patch','debug','correct']):
+        signals.append('fix confirmed')
 
-# Unexpected error pattern resolved
-if any(w in resp for w in ['deprecated','not found','version','incompatible','breaking']):
-  signals.append('version or compatibility issue')
+# Non-obvious bug caught during code reading or editing
+if any(w in resp for w in [\"won't expand\", \"doesn't expand\",
+                            'only set in', 'scoping issue', 'heredoc',
+                            'variable not set', 'platform-specific',
+                            'only on windows', 'only on macos',
+                            'let me fix', 'incorrect behavior',
+                            'wrong branch', 'missed case']):
+    signals.append('non-obvious bug caught')
 
-# Long-running command that finally worked
+# Version or compatibility issue resolved
+if any(w in resp for w in ['deprecated','not found','version',
+                            'incompatible','breaking','requires',
+                            'must be', 'needs to be']):
+    signals.append('version or compatibility issue')
+
+# Setup or build success after effort
 if any(w in cmd for w in ['install','build','compile','migrate','init']):
-  if '0' in resp or 'done' in resp or 'success' in resp:
-    signals.append('setup or build success')
+    if any(w in resp for w in ['done','success','installed','built',
+                                'complete','ok','ready']):
+        signals.append('setup or build success')
+
+# Architectural decision made
+if any(w in resp for w in ['decided to', 'chose to', 'instead of',
+                            'trade-off', 'because', 'reason:']):
+    if any(w in cmd for w in ['write','edit','create']):
+        signals.append('architectural decision')
 
 print(signals[0] if signals else '')
 " "$TOOL_CMD" "$TOOL_RESPONSE" 2>/dev/null)
@@ -191,7 +232,7 @@ d['nudge_last']=d.get('total_count',0)
 json.dump(d,open(f,'w'))
 " "$STATE_FILE" 2>/dev/null
 
-      SIGNAL_MSG="Signal detected: [$SIGNAL]. If this is reusable knowledge, call /remember with a specific one-sentence summary before continuing."
+      SIGNAL_MSG="Memory signal: [$SIGNAL]. If this is worth keeping, call /remember — it will ask whether to save to project memory (this project only) or global memory (available in all sessions). One sentence, specific."
 
       printf '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s"}}\n' \
         "$(echo "$SIGNAL_MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read())[1:-1])")"

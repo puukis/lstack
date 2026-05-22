@@ -102,6 +102,58 @@ if [ "${loop_result}" = "loop" ]; then
     exit 2
 fi
 
+# SEMANTIC LOOP DETECTION: catch repeated error patterns
+if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
+    SEM_LOOP_FILE="${LOG_DIR}/errloop-${PPID}.json"
+
+    cmd_shape="$("${PYTHON}" -c "
+import sys, re
+cmd = sys.argv[1].strip()
+tokens = cmd.split()
+shape = tokens[0] if tokens else ''
+for t in tokens[1:]:
+    if not t.startswith('-') and len(t) > 2:
+        shape += ' ' + re.sub(r'[0-9]+', 'N', t)[:20]
+        break
+print(shape[:40])
+" "${bash_cmd}" 2>/dev/null || echo '')"
+
+    if [ -n "${cmd_shape}" ]; then
+        sem_result="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo "ok"
+import json
+
+sem_file = "${SEM_LOOP_FILE}"
+shape = "${cmd_shape}"
+
+try:
+    with open(sem_file) as f:
+        state = json.load(f)
+except Exception:
+    state = {"shapes": []}
+
+shapes = state.get("shapes", [])
+shapes.append(shape)
+shapes = shapes[-10:]
+
+with open(sem_file, "w") as f:
+    json.dump({"shapes": shapes}, f)
+
+count = shapes.count(shape)
+if count >= 4:
+    print("loop")
+else:
+    print("ok")
+PYEOF
+)"
+
+        if [ "${sem_result}" = "loop" ]; then
+            printf 'Semantic loop detected: "%s" attempted %s times with different inputs but likely the same error. Stop, read the actual error output, and diagnose before retrying.' \
+                "${cmd_shape}" "4+"
+            exit 2
+        fi
+    fi
+fi
+
 # BASH SAFETY GATES
 if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
     # Check each dangerous pattern
