@@ -62,11 +62,11 @@ else:
 
     if [ "${_ctx_printed}" -eq 0 ] && [ "${complexity}" = "tier3" ]; then
         msg="This looks like a large task. Consider running /orchestrate first — it will evaluate whether sub-agents would help and ask before dispatching anything."
-        escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.stdin.read()))" <<< "${msg}" 2>/dev/null)"
+        escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${msg}" 2>/dev/null)"
         printf '{"additionalContext": %s}\n' "${escaped}"
     elif [ "${_ctx_printed}" -eq 0 ] && [ "${complexity}" = "tier2" ]; then
         msg="This looks like a multi-part task. /orchestrate can break it into parallel workstreams if helpful — or just proceed here."
-        escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.stdin.read()))" <<< "${msg}" 2>/dev/null)"
+        escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${msg}" 2>/dev/null)"
         printf '{"additionalContext": %s}\n' "${escaped}"
     fi
 fi
