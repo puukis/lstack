@@ -56,6 +56,7 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | Role personas                    | —          | yes    | yes         | yes    |
 | Spec-first development           | —          | —      | yes         | yes    |
 | Windows (Git Bash)               | —          | —      | —           | yes    |
+| Intelligent sub-agent routing    | —          | —      | —           | yes    |
 | No daemon / no runtime           | yes        | yes    | yes         | yes    |
 | Semantic vector search           | —          | —      | —           | yes    |
 | MCP server (local stdio)         | —          | —      | —           | yes    |
@@ -87,6 +88,7 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | /recall        | "what do you know", "do you remember"        | search, browse, and manage persistent memory observations      |
 | /analytics     | explicitly invoked                           | memory analytics: observations per week, top tags, scope       |
 | /changelog     | explicitly invoked                           | generates CHANGELOG.md entry from git log since last tag       |
+| /orchestrate   | Tier 2/3 tasks detected                      | Evaluates complexity, offers sub-agent dispatch with AskUserQuestion |
 
 ---
 
@@ -100,6 +102,31 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | hooks/pre-compact.sh      | Before compaction      | Saves handover summary via fresh subprocess                |
 | hooks/stop.sh             | Session ends           | Runs project tests, stores session learnings in SQLite     |
 | scripts/token-budget.sh   | Each prompt            | Warns at 60% context, alerts at 80%                        |
+
+---
+
+## Sub-Agent Architecture
+
+lstack ships six specialist sub-agents in ~/.claude/agents/.
+The main session orchestrates; workers handle scoped tasks in
+isolation with their own context windows.
+
+| Agent       | Model      | Purpose                                    |
+|-------------|------------|--------------------------------------------|
+| researcher  | Haiku 4.5  | Codebase exploration, pattern finding       |
+| implementer | Sonnet 4.6 | Feature implementation, bug fixes          |
+| reviewer    | Sonnet 4.6 | Code review, security audit                |
+| tester      | Haiku 4.5  | Test writing                               |
+| debugger    | Sonnet 4.6 | Root cause analysis                        |
+| architect   | Sonnet 4.6 | System design, ADRs                        |
+
+Model rationale: Haiku 4.5 delivers near-Sonnet 4 performance at
+3.75x lower cost. Use it for search-and-summarize work. Sonnet 4.6
+handles implementation and reasoning. The orchestrator model is
+whatever model you're running in your main session.
+
+Routing is automatic for Tier 3 tasks and user-prompted for Tier 2.
+Tier 1 tasks (under 20 min, 1-2 files) never use sub-agents.
 
 ---
 
