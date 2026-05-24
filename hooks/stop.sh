@@ -71,94 +71,187 @@ run_learning_extraction() {
     local transcript_path
     transcript_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
 import sys, json
-data = {}
 try:
-    data = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.read())
+    print(d.get('transcript_path', ''))
 except Exception:
-    pass
-print(data.get('transcript_path', ''))
+    print('')
 " 2>/dev/null || echo '')"
 
-    [ -z "${transcript_path}" ] && return 0
-    [ ! -f "${transcript_path}" ] && return 0
-    command -v claude >/dev/null 2>&1 || return 0
-
-    local patterns_file
-    if [ -n "${git_root}" ] && [ -d "${git_root}/.claude/memory" ]; then
-        patterns_file="${git_root}/.claude/memory/patterns.md"
-    else
-        patterns_file="${CLAUDE_DIR}/memory/patterns.md"
+    # Convert Windows path (C:\... or C:/...) to POSIX for Git Bash
+    if [ -n "${transcript_path}" ]; then
+        transcript_path="$("${PYTHON}" -c "
+import sys, re
+p = sys.argv[1]
+m = re.match(r'^([A-Za-z])[:/\\\\](.*)', p)
+if m:
+    drive = m.group(1).lower()
+    rest = m.group(2).replace('\\\\', '/')
+    print(f'/{drive}/{rest}')
+else:
+    print(p)
+" "${transcript_path}" 2>/dev/null || echo "${transcript_path}")"
     fi
 
-    local transcript_excerpt
-    transcript_excerpt="$(tail -c 2000 "${transcript_path}" 2>/dev/null || true)"
-    [ -z "${transcript_excerpt}" ] && return 0
+    printf '[%s] STOP learn-extract transcript="%s"\n' "$(iso_now)" \
+        "${transcript_path}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
 
-    local learn_prompt
-    learn_prompt="Session transcript (excerpt):
+    if [ -z "${transcript_path}" ] || [ ! -f "${transcript_path}" ]; then
+        printf '[%s] STOP learn-extract exit: no transcript\n' "$(iso_now)" \
+        >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+        return 0
+    fi
+
+    local _learn_session_id _learn_project_raw _learn_project
+    _learn_session_id="$("${PYTHON}" -c "import os; print(os.getppid())" \
+        2>/dev/null || echo "$$")"
+    _learn_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    _learn_project="$(to_native_path "${_learn_project_raw}" \
+        2>/dev/null || echo "${_learn_project_raw}")"
+    _learn_project="${_learn_project//\\//}"
+
+    local learnings=""
+
+    # --- LAYER 1: LLM extraction via saved claude path ---
+    local _claude_bin=""
+    local _bin_file="${CLAUDE_DIR}/memory/.claude-bin"
+
+    if [ -f "${_bin_file}" ]; then
+        _claude_bin="$(cat "${_bin_file}" 2>/dev/null | tr -d '[:space:]')"
+    fi
+
+    # Also try PATH as a secondary check (works on macOS/Linux)
+    if [ -z "${_claude_bin}" ] || [ ! -x "${_claude_bin}" ]; then
+        _claude_bin="$(command -v claude 2>/dev/null || true)"
+    fi
+
+    if [ -n "${_claude_bin}" ] && [ -x "${_claude_bin}" ]; then
+        printf '[%s] STOP learn-extract using claude at %s\n' "$(iso_now)" \
+            "${_claude_bin}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+
+        local transcript_excerpt
+        transcript_excerpt="$(tail -c 4000 "${transcript_path}" 2>/dev/null || true)"
+
+        if [ -n "${transcript_excerpt}" ]; then
+            local learn_prompt
+            learn_prompt="Session transcript (last portion):
 ${transcript_excerpt}
 
 ---
-Read this transcript. Extract at most 3 bullet points worth saving to
-persistent memory. Only include items matching these criteria:
+Read this transcript excerpt. Extract up to 5 observations worth saving to
+persistent memory across sessions.
+
+Include ONLY items that match these criteria:
 - Non-obvious bugs and their confirmed root cause
-- APIs or libraries behaving differently than expected
-- Project conventions discovered by reading code
-- Commands or sequences that fixed a recurring error
-- Architectural decisions and the reason they were made
-Output ONLY the bullets, max 20 words each, plain text.
-If nothing meets the criteria, output nothing."
+- APIs, tools, or libraries behaving unexpectedly or differently than documented
+- Project-specific conventions discovered by reading code (not told explicitly)
+- Commands, flags, or sequences that fixed a recurring or tricky error
+- Architectural decisions and the reasoning behind them
+- Platform-specific gotchas (Windows, macOS, version differences)
+- Anything you would want to know at the start of the next session to avoid
+  repeating a mistake or rediscovering something already solved
 
-    local learnings
-    learnings="$(printf '%s' "${learn_prompt}" | claude -p 2>/dev/null || true)"
-    [ -z "${learnings}" ] && return 0
+Output ONLY the observations, one per line, max 150 characters each, plain
+text, no bullets, no numbering, no prefixes. If nothing qualifies, output
+nothing."
 
-    if [ ! -f "${patterns_file}" ]; then
-        printf '# Patterns\n\n## Solutions\n' > "${patterns_file}"
+            learnings="$(printf '%s' "${learn_prompt}" | \
+                "${_claude_bin}" -p 2>/dev/null || true)"
+
+            if [ -n "${learnings}" ]; then
+                printf '[%s] STOP learn-extract LLM success\n' "$(iso_now)" \
+                    >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+            else
+                printf '[%s] STOP learn-extract LLM returned empty\n' "$(iso_now)" \
+                    >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+            fi
+        fi
+    else
+        printf '[%s] STOP learn-extract claude not found, using Python fallback\n' \
+            "$(iso_now)" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
     fi
 
-    local iso_ts
-    iso_ts="$(iso_now)"
-    printf '%s' "${learnings}" | while IFS= read -r line; do
-        [ -n "${line}" ] && printf '- [%s] %s\n' "${iso_ts}" "${line}" >> "${patterns_file}"
-    done
+    # --- LAYER 2: Python fallback if LLM extraction produced nothing ---
+    # Reads JSONL transcript directly. Stores every assistant message
+    # over 60 chars. No filtering - nothing suppressed. Some noise is fine.
+    if [ -z "${learnings}" ]; then
+        printf '[%s] STOP learn-extract running Python fallback\n' "$(iso_now)" \
+            >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
 
-    "${PYTHON}" - "${patterns_file}" <<'PYCAP' 2>/dev/null || true
-import sys
+        learnings="$("${PYTHON}" - "${transcript_path}" <<'PYEOF' 2>/dev/null || echo ''
+import sys, json, re
+
 path = sys.argv[1]
-with open(path, 'r') as f:
-    lines = f.readlines()
-if len(lines) > 100:
-    headers = [l for l in lines if not l.startswith('- [')]
-    bullets = [l for l in lines if l.startswith('- [')]
-    bullets = bullets[20:]
-    with open(path, 'w') as f:
-        f.writelines(headers[:3])
-        f.writelines(bullets)
-PYCAP
+try:
+    with open(path, encoding='utf-8', errors='replace') as f:
+        raw_lines = f.readlines()
+except Exception:
+    sys.exit(0)
 
-    local _learn_session_id _learn_project_raw _learn_project
-    _learn_session_id="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
-    _learn_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    _learn_project="$(to_native_path "${_learn_project_raw}" 2>/dev/null || echo "${_learn_project_raw}")"
-    _learn_project="${_learn_project//\\//}"
+messages = []
+for line in reversed(raw_lines):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    if entry.get('role') != 'assistant':
+        continue
+    content = entry.get('content', '')
+    if isinstance(content, list):
+        text = ' '.join(
+            c.get('text', '') for c in content
+            if isinstance(c, dict) and c.get('type') == 'text'
+        )
+    elif isinstance(content, str):
+        text = content
+    else:
+        continue
+    text = text.strip()
+    # Take only the first sentence
+    first = re.split(r'(?<=[.!?])\s', text)[0].strip()
+    first = re.sub(r'\s+', ' ', first)
+    if len(first) >= 60:
+        messages.append(first[:150])
+    if len(messages) >= 5:
+        break
 
+for m in messages:
+    print(m)
+PYEOF
+)"
+    fi
+
+    if [ -z "${learnings}" ]; then
+        printf '[%s] STOP learn-extract: nothing to store\n' "$(iso_now)" \
+            >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+        return 0
+    fi
+
+    # Store each learning in the DB
+    local _stored=0
     printf '%s' "${learnings}" | while IFS= read -r _learn_line; do
         [ -z "${_learn_line}" ] && continue
         local _learn_tags
         _learn_tags="$("${PYTHON}" -c "
-import sys,os
-sys.path.insert(0,os.path.expanduser('~/.claude/scripts'))
+import sys, os
+sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
 try:
-  from db import extract_keywords
-  print(','.join(extract_keywords(sys.argv[1])))
-except: print('')
+    from db import extract_keywords
+    print(','.join(extract_keywords(sys.argv[1])))
+except Exception:
+    print('')
 " "${_learn_line}" 2>/dev/null || echo '')"
         "${PYTHON}" "${DB_PY}" observe \
-            "${_learn_session_id}" "${_learn_project}" "${_learn_line}" "${_learn_tags}" 2>/dev/null || true
+            "${_learn_session_id}" "${_learn_project}" \
+            "${_learn_line}" "${_learn_tags}" 2>/dev/null && \
+            _stored=$(( _stored + 1 )) || true
     done
 
-    printf '[%s] STOP learning-extracted\n' "$(iso_now)" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+    printf '[%s] STOP learning-extracted\n' "$(iso_now)" \
+        >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
 }
 
 if [ -z "${test_cmd}" ]; then
@@ -168,8 +261,7 @@ if [ -z "${test_cmd}" ]; then
     exit 0
 fi
 
-# Run test command with 60s timeout
-test_output="$(cd "${git_root}" && timeout 60 bash -c "${test_cmd}" 2>&1)" && test_rc=0 || test_rc=$?
+test_output="$(cd "${git_root}" && bash -c "${test_cmd}" 2>&1)" && test_rc=0 || test_rc=$?
 
 if [ "${test_rc}" -eq 0 ]; then
     printf '[%s] STOP tests-passed cmd="%s"\n' "${iso}" "${test_cmd}" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true

@@ -865,6 +865,15 @@ PREFEOF
     fi
 
     # Step E — summary
+    # Save absolute claude path for hook subprocess use (bypasses PATH issues)
+    _claude_bin="$(command -v claude 2>/dev/null || true)"
+    if [ -n "${_claude_bin}" ]; then
+        printf '%s\n' "${_claude_bin}" > "${CLAUDE_DIR}/memory/.claude-bin"
+        echo "claude path saved: ${_claude_bin}"
+    else
+        echo "Warning: claude not found in PATH - run lstack settings from Git Bash"
+    fi
+
     printf '\n'
     printf 'Onboarding complete. Your setup:\n'
     local _skill_count=0
@@ -1085,8 +1094,17 @@ cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
     bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${out}"
+    # Save absolute claude path for hook subprocess use (bypasses PATH issues)
+    _claude_bin="$(command -v claude 2>/dev/null || true)"
+    if [ -n "${_claude_bin}" ]; then
+        printf '%s\n' "${_claude_bin}" > "${CLAUDE_DIR}/memory/.claude-bin"
+        echo "claude path saved: ${_claude_bin}"
+    else
+        echo "Warning: claude not found in PATH - run lstack settings from Git Bash"
+    fi
     echo "Done. Validating JSON..."
-    python3 -m json.tool "${out}" > /dev/null && echo "settings.json is valid." || echo "Warning: JSON validation failed."
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    "${PYTHON}" -m json.tool "${out}" > /dev/null && echo "settings.json is valid." || echo "Warning: JSON validation failed."
 }
 
 # Main dispatch
