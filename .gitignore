@@ -5,6 +5,7 @@ settings.json
 
 # Local / personal Claude Code settings
 .claude/settings.local.json
+AGENTS.md
 
 # Downloaded plugin marketplace data
 plugins/
@@ -14,6 +15,9 @@ logs/
 *.log
 loop-*.json
 reads-*.json
+daemon/
+ide/
+jobs/
 
 # Personal memory (ephemeral / private)
 memory/handover.md
@@ -24,6 +28,7 @@ memory/feedback_*.md
 memory/user_*.md
 memory/project_*.md
 memory/reference_*.md
+memory/config.json
 .claude/memory/
 
 # Credentials & auth
@@ -38,6 +43,8 @@ cache/
 downloads/
 backups/
 file-history/
+__pycache__/
+*.py[cod]
 
 # History
 history.jsonl

@@ -1,0 +1,5 @@
+*.sh text eol=lf
+bin/lstack text eol=lf
+scripts/*.py text eol=lf
+skills/**/SKILL.md text eol=lf
+*.md text
