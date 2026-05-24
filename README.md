@@ -13,9 +13,9 @@ A personal Claude Code environment that actually enforces things.
 
 ## What it is
 
-lstack is a portable ~/.claude environment for Claude Code. It adds persistent SQLite memory across sessions, loop detection, bash safety gates, auto-formatting, on-demand skills, and a custom statusline — all working through Claude Code's native hook system.
+lstack is a portable ~/.claude environment for Claude Code. It adds persistent SQLite memory across sessions, loop detection, bash safety gates, auto-formatting, on-demand skills, and a custom statusline - all working through Claude Code's native hook system.
 
-No runtime. No daemon. No dependencies beyond bash, python3, and git.
+No runtime. No daemon. Dependencies: bash, git, and usable Python 3. Python can be `python3`, `python`, or `py -3` on Windows Git Bash.
 
 ---
 
@@ -30,11 +30,11 @@ Or manually:
     git clone https://github.com/puukis/lstack /tmp/lstack
     bash /tmp/lstack/install.sh
 
-The installer detects your OS, generates the correct settings.json, initializes the memory database, and runs interactive onboarding. Existing ~/.claude setups are backed up with a timestamp before anything is written.
+The installer detects your OS, verifies usable Python 3, generates the correct settings.json, initializes the memory database, and runs interactive onboarding. Existing ~/.claude setups are backed up with a timestamp before anything is written.
 
 After install: restart Claude Code, then run `lstack init` in any project.
 
-Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
+Windows: runs in Git Bash. All hooks support native Windows Python through `py -3`; `python` and `python3` are not required if the launcher works. No WSL required. If no usable Python is found, the installer stops with a fix message instead of installing broken hooks.
 
 ---
 
@@ -218,7 +218,7 @@ Automatic injection points:
 
 - **Session start**: injects a compact structured-learning block, then recent legacy observations. At most 5 structured learnings are injected.
 - **Mid-session**: when Claude reads a file or runs a command, relevant structured learnings and observations can be retrieved. This is rate-limited.
-- **Session end**: Stop hook extracts up to 3 durable structured learnings when the model returns validated JSONL. Conservative fallback may store legacy observations only.
+- **Session end**: Stop hook runs the configured project test command and extracts only explicit `[LSTACK_LEARNING]` marker blocks from the final assistant message. No marker means nothing is stored.
 
 Structured learning types:
 
@@ -283,6 +283,36 @@ Structured learning examples:
 
 From inside Claude Code, use `/learn` or `/remember` to store a structured learning, `/recall` to search learnings and observations, `/forget` to delete or demote memory, and `/analytics` to inspect memory health.
 
+Stop hook learning extraction:
+
+    [LSTACK_LEARNING]
+    type: operational
+    key: windows-git-bash-stop-hook-recursion
+    insight: Running claude -p inside a Stop hook starts nested Claude sessions on Windows Git Bash and can recurse.
+    confidence: 9
+    source: observed
+    [/LSTACK_LEARNING]
+
+The Stop hook accepts up to 5 marker blocks. Allowed types are `pattern`, `pitfall`, `preference`, `architecture`, `tool`, `operational`, and `investigation`. Allowed sources are `observed`, `user-stated`, `inferred`, and `cross-model`. Keys must use lowercase letters, numbers, dots, hyphens, or underscores. Unsafe instruction-like insights are rejected.
+
+Automatic LLM extraction from transcripts is disabled by default because calling `claude -p` from inside lifecycle hooks can start nested Claude Code sessions and recurse. The default extractor is deterministic and local: it reads `last_assistant_message`, validates explicit markers, and stores compact observations like `[type/key] insight` with tags `lstack-learning`, type, source, and key. Stop writes use no-embed mode for speed; run `lstack memory embed-all` later to backfill observation embeddings.
+
+Config lives in `~/.claude/memory/lstack-config.json` and is optional. Safe defaults:
+
+    {
+      "learning_extract_llm": false,
+      "learning_extract_markers": true,
+      "learning_max_markers": 5,
+      "learning_stop_no_embed": true
+    }
+
+Logs:
+
+    ~/.claude/logs/sessions.log
+    ~/.claude/logs/learn-extract.log
+
+`sessions.log` records Stop start, cwd, transcript path, Python availability, test status, and learning summaries. `learn-extract.log` records marker validation and DB write details. Full hook JSON and transcripts are not dumped.
+
 Privacy: memory stays local in `~/.claude/memory/lstack.db` unless you explicitly export or sync it.
 
 ---
@@ -294,6 +324,10 @@ lstack exposes its memory as a local MCP server via stdio transport. Any tool wi
 Enable by running `lstack settings` (registers automatically), or manually:
 
     claude mcp add lstack -- python3 ~/.claude/scripts/mcp_server.py
+
+On Windows Git Bash with only the Python launcher:
+
+    claude mcp add lstack -- py -3 ~/.claude/scripts/mcp_server.py
 
 Or start interactively:
 

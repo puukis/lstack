@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Shell syntax
+        shell: bash
+        run: |
+          bash -n hooks/stop.sh
+          bash -n scripts/os.sh
+          bash -n scripts/gen-settings.sh
+      - name: Python tests
+        shell: bash
+        run: python -m unittest discover -s tests
+      - name: Generated settings validation
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.claude/scripts"
+          cp scripts/os.sh "$HOME/.claude/scripts/os.sh"
+          bash scripts/gen-settings.sh > /tmp/lstack-settings.json
+          python -m json.tool /tmp/lstack-settings.json >/dev/null
