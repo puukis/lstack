@@ -34,7 +34,7 @@ The installer detects your OS, verifies usable Python 3, generates the correct s
 
 After install: restart Claude Code, then run `lstack init` in any project.
 
-Windows: runs in Git Bash. All hooks support native Windows Python through `py -3`; `python` and `python3` are not required if the launcher works. No WSL required. If no usable Python is found, the installer stops with a fix message instead of installing broken hooks.
+Windows: runs in Git Bash, not WSL. All hooks support native Windows Python through `py -3`; `python` and `python3` are not required if the launcher works. Use `/c/...` or `/d/...` paths in Git Bash, not `/mnt/c/...` WSL paths. If no usable Python is found, the installer stops with a fix message instead of installing broken hooks.
 
 ---
 
@@ -364,6 +364,11 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 | lstack analytics      | Memory analytics: observations per week, top tags|
 | lstack mcp            | Start lstack MCP server (stdio transport)        |
 | lstack memory embed-all | Backfill semantic embeddings for all observations|
+| lstack brain status | Show LBrain local trust brain status             |
+| lstack brain passport | Show repo facts, commands, package manager, paths|
+| lstack brain context | Export compact context for AI coding tools       |
+| lstack brain decisions | Manage durable implementation decisions        |
+| lstack brain capture | Record events and review memory candidates       |
 | lstack learn add      | Add a typed structured learning                  |
 | lstack learn search   | Search structured learnings                      |
 | lstack learn list     | List structured learnings                        |
