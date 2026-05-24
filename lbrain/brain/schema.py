@@ -1,0 +1,253 @@
+"""SQLite schema for LBrain."""
+
+PHASE_1A_TABLES = {
+    "brain_projects",
+    "brain_passports",
+    "brain_attempts",
+    "brain_context_decisions",
+}
+
+PHASE_1B_TABLES = {
+    "brain_decisions",
+    "brain_capture_events",
+    "brain_memory_candidates",
+}
+
+LBRAIN_TABLES = PHASE_1A_TABLES | PHASE_1B_TABLES
+
+
+def init_schema(con):
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS brain_projects (
+            id INTEGER PRIMARY KEY,
+            root_path_hash TEXT NOT NULL,
+            root_path_display TEXT,
+            repo_id TEXT,
+            git_remote_hash TEXT,
+            git_branch TEXT,
+            name TEXT,
+            platform TEXT,
+            shell_mode TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(root_path_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_projects_root_path_hash
+            ON brain_projects(root_path_hash);
+        CREATE INDEX IF NOT EXISTS idx_brain_projects_repo_id
+            ON brain_projects(repo_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_projects_git_remote_hash
+            ON brain_projects(git_remote_hash);
+
+        CREATE TABLE IF NOT EXISTS brain_passports (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            stack_json TEXT NOT NULL,
+            commands_json TEXT NOT NULL,
+            paths_json TEXT NOT NULL,
+            rules_json TEXT NOT NULL,
+            architecture_summary TEXT,
+            danger_zones_json TEXT NOT NULL,
+            manual_overrides_json TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id, version),
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_passports_project_id
+            ON brain_passports(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_passports_project_version
+            ON brain_passports(project_id, version);
+        CREATE INDEX IF NOT EXISTS idx_brain_passports_detected_at
+            ON brain_passports(detected_at);
+
+        CREATE TABLE IF NOT EXISTS brain_attempts (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            attempted_action TEXT NOT NULL,
+            command_redacted TEXT,
+            command_fingerprint TEXT,
+            files_touched_json TEXT NOT NULL,
+            error_summary TEXT,
+            root_cause TEXT,
+            why_failed TEXT,
+            replacement_approach TEXT,
+            platform TEXT,
+            retry_policy TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_session_id TEXT,
+            confidence INTEGER NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_seen_at TEXT,
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_attempts_project_id
+            ON brain_attempts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_attempts_command_fingerprint
+            ON brain_attempts(command_fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_brain_attempts_project_retry_policy
+            ON brain_attempts(project_id, retry_policy);
+        CREATE INDEX IF NOT EXISTS idx_brain_attempts_last_seen_at
+            ON brain_attempts(last_seen_at);
+
+        CREATE TABLE IF NOT EXISTS brain_context_decisions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            session_id TEXT,
+            target TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            item_id INTEGER,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            relevance_score REAL,
+            token_estimate INTEGER,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_context_project_session
+            ON brain_context_decisions(project_id, session_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_context_target
+            ON brain_context_decisions(target);
+        CREATE INDEX IF NOT EXISTS idx_brain_context_item
+            ON brain_context_decisions(item_type, item_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_context_created_at
+            ON brain_context_decisions(created_at);
+
+        CREATE TABLE IF NOT EXISTS brain_decisions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            scope TEXT NOT NULL DEFAULT 'project',
+            key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            rationale TEXT,
+            enforcement_hint TEXT,
+            applies_to_json TEXT NOT NULL,
+            forbidden_patterns_json TEXT NOT NULL,
+            required_patterns_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            supersedes_key TEXT,
+            UNIQUE(project_id, key),
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_project_id
+            ON brain_decisions(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_key
+            ON brain_decisions(key);
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_status
+            ON brain_decisions(status);
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_project_key
+            ON brain_decisions(project_id, key);
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_updated_at
+            ON brain_decisions(updated_at);
+
+        CREATE TABLE IF NOT EXISTS brain_capture_events (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            session_id TEXT,
+            event_type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            command_fingerprint TEXT,
+            command_preview_redacted TEXT,
+            path TEXT,
+            evidence_json TEXT NOT NULL,
+            confidence_delta INTEGER NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_capture_events_project_id
+            ON brain_capture_events(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_capture_events_session_id
+            ON brain_capture_events(session_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_capture_events_event_type
+            ON brain_capture_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_brain_capture_events_command_fingerprint
+            ON brain_capture_events(command_fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_brain_capture_events_created_at
+            ON brain_capture_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS brain_memory_candidates (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            scope TEXT NOT NULL DEFAULT 'project',
+            candidate_type TEXT NOT NULL,
+            key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            rationale TEXT,
+            proposed_target TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            source TEXT NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            promoted_to_type TEXT,
+            promoted_to_id INTEGER,
+            UNIQUE(project_id, candidate_type, key),
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_project_id
+            ON brain_memory_candidates(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_candidate_type
+            ON brain_memory_candidates(candidate_type);
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_key
+            ON brain_memory_candidates(key);
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_status
+            ON brain_memory_candidates(status);
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_confidence
+            ON brain_memory_candidates(confidence);
+        CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_updated_at
+            ON brain_memory_candidates(updated_at);
+        """
+    )
+    _ensure_column(con, "brain_decisions", "scope", "TEXT NOT NULL DEFAULT 'project'")
+    _ensure_column(con, "brain_memory_candidates", "scope", "TEXT NOT NULL DEFAULT 'project'")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_brain_decisions_scope ON brain_decisions(scope)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_scope ON brain_memory_candidates(scope)")
+    con.commit()
+
+
+def _ensure_column(con, table, column, definition):
+    columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def existing_tables(con):
+    rows = con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    return {row[0] for row in rows}
+
+
+def missing_phase_1a_tables(con):
+    return sorted(PHASE_1A_TABLES - existing_tables(con))
+
+
+def missing_phase_1b_tables(con):
+    return sorted(PHASE_1B_TABLES - existing_tables(con))
+
+
+def missing_lbrain_tables(con):
+    return sorted(LBRAIN_TABLES - existing_tables(con))

@@ -887,6 +887,22 @@ else
     _failures=$(( _failures + 1 ))
 fi
 
+if [ -f "${CLAUDE_DIR}/lbrain/brain.py" ] && [ -d "${CLAUDE_DIR}/lbrain/brain" ]; then
+    check_pass "LBrain files installed"
+else
+    check_fail "LBrain files missing"
+    ui_info "Fix: reinstall lstack so ~/.claude/lbrain is present"
+    _failures=$(( _failures + 1 ))
+fi
+
+if [ "${PYTHON_AVAILABLE}" = "true" ] && bash "${CLAUDE_DIR}/bin/lstack" brain status &>/dev/null; then
+    check_pass "LBrain CLI works"
+else
+    check_fail "LBrain CLI failed"
+    ui_info "Fix: ensure Python 3 works, then run: lstack brain doctor"
+    _failures=$(( _failures + 1 ))
+fi
+
 # ─── Onboarding ───────────────────────────────────────────────────────────────
 
 _elapsed_str="$(_elapsed)"

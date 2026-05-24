@@ -8,12 +8,17 @@ VERSION="1.0.0"
 
 usage() {
     cat <<EOF
-lstack ${VERSION} — Claude Code personal environment
+lstack ${VERSION} -- Claude Code personal environment
 
 Commands:
   init              Scaffold .claude/ in current project directory
   settings          Regenerate settings.json for the current OS
-  doctor            Diagnose installation health
+  runtime [--json]  Show cross-platform runtime status (OS, Python, Git, paths)
+  doctor [--fix] [--json] [--deep]
+                    Diagnose (and optionally repair) lstack installation
+  health [--json] [--save|--no-save] [--fast|--full] [--history] [--compare]
+         [--configure] [--detect]
+                    Project quality health dashboard
   onboard           Interactive first-run setup
   memory            Open project or global MEMORY.md in \$EDITOR
   memory stats      Show persistent DB stats
@@ -37,9 +42,10 @@ Commands:
   publish           Package lstack for open-source sharing
   forget [query]    Delete matching observations from persistent memory
   edit [query]      Search and interactively edit an observation
-  analytics         Show memory analytics — observations per week, top tags, scope breakdown
+  analytics         Show memory analytics -- observations per week, top tags, scope breakdown
   mcp               Start lstack MCP server (stdio transport)
   memory embed-all  Backfill semantic embeddings for all observations
+  brain             LBrain local trust brain: passport, attempts, decisions, capture, context, doctor
   learn             Manage structured learnings
   sync              Sync memory to/from a private git repo (cross-device)
   help              Show this message
@@ -292,6 +298,15 @@ cmd_memory() {
             exit 1
             ;;
     esac
+}
+
+cmd_brain() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    if [ "${PYTHON_AVAILABLE:-false}" != "true" ]; then
+        echo "Error: Python 3 is required for lstack brain. On Windows Git Bash, ensure py -3 works." >&2
+        exit 5
+    fi
+    run_python "${CLAUDE_DIR}/lbrain/brain.py" "$@"
 }
 
 cmd_search() {
@@ -565,7 +580,8 @@ cmd_publish() {
     local staging="/tmp/lstack-publish-${timestamp}"
 
     echo "Creating staging directory: ${staging}"
-    mkdir -p "${staging}/skills" "${staging}/hooks" "${staging}/scripts" "${staging}/bin"
+    mkdir -p "${staging}/skills" "${staging}/hooks" "${staging}/scripts" "${staging}/bin" \
+             "${staging}/lbrain/brain" "${staging}/docs"
 
     # Explicit copies — no wildcards that could grab sensitive files
     [ -f "${CLAUDE_DIR}/CLAUDE.md" ] && cp "${CLAUDE_DIR}/CLAUDE.md" "${staging}/CLAUDE.md"
@@ -582,6 +598,13 @@ cmd_publish() {
     for f in "${CLAUDE_DIR}/scripts/"*.py; do
         [ -f "${f}" ] && cp "${f}" "${staging}/scripts/"
     done
+    for f in "${CLAUDE_DIR}/lbrain/"*.py; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/lbrain/"
+    done
+    for f in "${CLAUDE_DIR}/lbrain/brain/"*.py; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/lbrain/brain/"
+    done
+    [ -f "${CLAUDE_DIR}/docs/lbrain.md" ] && cp "${CLAUDE_DIR}/docs/lbrain.md" "${staging}/docs/lbrain.md"
     [ -f "${CLAUDE_DIR}/bin/lstack" ] && cp "${CLAUDE_DIR}/bin/lstack" "${staging}/bin/lstack"
 
     # Generate settings.json.example — replace absolute HOME paths with ./
@@ -615,7 +638,7 @@ structured workflows.
 ```
 ~/.claude/
 ├── CLAUDE.md          # Global identity + rules (loaded every session)
-├── bin/lstack         # CLI: init, status, clean, upgrade, publish, dashboard
+├── bin/lstack         # CLI: init, status, brain, clean, upgrade, publish
 ├── hooks/             # Claude Code lifecycle hooks
 │   ├── session-start.sh   # Load memory + git context
 │   ├── pre-tool.sh        # Loop detection, bash safety gates, read deduplication
@@ -625,6 +648,9 @@ structured workflows.
 ├── scripts/           # Shared utilities
 │   ├── os.sh              # Portable OS detection + helper functions
 │   └── dashboard.sh       # Live parallel-agent status display
+├── lbrain/            # LBrain local trust brain
+│   ├── brain.py           # lstack brain CLI entrypoint
+│   └── brain/             # Repo passport, attempts, context, redaction
 ├── skills/            # On-demand skill prompts (invoked via /skillname)
 │   ├── engineer.md, planner.md, reviewer.md, refactor.md
 │   ├── test.md, debug.md, ship.md, docs.md
@@ -675,114 +701,456 @@ READMEEOF
     echo "  # or push directly with git"
 }
 
+cmd_runtime() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    if [ -f "${CLAUDE_DIR}/scripts/runtime.sh" ]; then
+        # shellcheck source=scripts/runtime.sh
+        source "${CLAUDE_DIR}/scripts/runtime.sh"
+    fi
+
+    local do_json=false
+    for _a in "$@"; do
+        [ "${_a}" = "--json" ] && do_json=true
+    done
+
+    local _py_ver=""
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        _py_ver="$(run_python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" 2>/dev/null || echo "unknown")"
+    fi
+    local _py_label
+    _py_label="$(python_provider_label 2>/dev/null || echo "unavailable")"
+
+    local _git_ver=""
+    _git_ver="$(git --version 2>/dev/null | awk '{print $3}' || echo "")"
+    local _git_avail="false"
+    [ -n "${_git_ver}" ] && _git_avail="true"
+
+    local _claude_path=""
+    _claude_path="$(command -v claude 2>/dev/null || true)"
+
+    local _claude_type="native"
+    if [ -n "${_claude_path}" ] && [ "${OS:-linux}" = "windows" ]; then
+        case "${_claude_path}" in
+            *.exe) _claude_type="Windows PE (native) on Git Bash" ;;
+            *)     _claude_type="shell wrapper or unknown" ;;
+        esac
+    fi
+
+    local _settings_path="${CLAUDE_DIR}/settings.json"
+    local _db_path="${CLAUDE_DIR}/memory/lstack.db"
+    local _path_sample=""
+    if type normalize_hook_path >/dev/null 2>&1; then
+        _path_sample="$(normalize_hook_path "${HOME}/.claude" 2>/dev/null || echo "${HOME}/.claude")"
+    else
+        _path_sample="${HOME}/.claude"
+    fi
+
+    if [ "${do_json}" = "true" ]; then
+        run_python -c "
+import json, os, sys
+print(json.dumps({
+  'os': '${OS:-unknown}',
+  'shell': '${BASH_VERSION:-unknown}',
+  'home': os.path.expanduser('~'),
+  'claude_dir': '${CLAUDE_DIR}',
+  'python_available': ${PYTHON_AVAILABLE:-false},
+  'python_provider': '${_py_label}',
+  'python_version': '${_py_ver}',
+  'git_available': ${_git_avail},
+  'git_version': '${_git_ver}',
+  'claude_path': '${_claude_path}',
+  'claude_type': '${_claude_type}',
+  'settings_path': '${_settings_path}',
+  'db_path': '${_db_path}',
+  'path_sample': '${_path_sample}'
+}, indent=2))
+" 2>/dev/null || printf '{"error":"Python unavailable for JSON output"}\n'
+        return 0
+    fi
+
+    printf 'lstack runtime status\n\n'
+    printf '%-18s %s\n' 'OS:'            "${OS:-unknown}"
+    printf '%-18s %s\n' 'Shell:'         "bash ${BASH_VERSION:-unknown}"
+    printf '%-18s %s\n' 'HOME:'          "${HOME}"
+    printf '%-18s %s\n' 'CLAUDE_DIR:'    "${CLAUDE_DIR}"
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        printf '%-18s %s\n' 'Python:'        "available"
+        printf '%-18s %s\n' 'Python provider:' "${_py_label}"
+        printf '%-18s %s\n' 'Python version:' "${_py_ver}"
+    else
+        printf '%-18s %s\n' 'Python:'        "NOT FOUND"
+        printf '%-18s %s\n' 'Python provider:' "none"
+    fi
+    if [ "${_git_avail}" = "true" ]; then
+        printf '%-18s %s\n' 'Git:'           "available (${_git_ver})"
+    else
+        printf '%-18s %s\n' 'Git:'           "NOT FOUND"
+    fi
+    if [ -n "${_claude_path}" ]; then
+        printf '%-18s %s\n' 'Claude path:'   "${_claude_path}"
+        [ "${OS:-linux}" = "windows" ] && printf '%-18s %s\n' 'Claude type:'   "${_claude_type}"
+    else
+        printf '%-18s %s\n' 'Claude path:'   "(not in PATH)"
+    fi
+    printf '%-18s %s\n' 'Settings path:' "${_settings_path}"
+    printf '%-18s %s\n' 'DB path:'       "${_db_path}"
+    printf '%-18s %s -> %s\n' 'Path sample:' '~/.claude' "${_path_sample}"
+}
+
 cmd_doctor() {
     source "${CLAUDE_DIR}/scripts/os.sh"
-    local failures=0
+    if [ -f "${CLAUDE_DIR}/scripts/runtime.sh" ]; then
+        # shellcheck source=scripts/runtime.sh
+        source "${CLAUDE_DIR}/scripts/runtime.sh"
+    fi
 
-    _check_pass() { printf '  [\033[32m✓\033[0m] %s\n' "$1"; }
-    _check_fail() { printf '  [\033[31m✗\033[0m] %s\n' "$1"; failures=$(( failures + 1 )); }
+    local do_fix=false do_json=false do_deep=false
+    for _a in "$@"; do
+        case "${_a}" in
+            --fix)  do_fix=true ;;
+            --json) do_json=true ;;
+            --deep) do_deep=true ;;
+        esac
+    done
 
-    # CLAUDE.md present and under 80 lines
+    # Accumulate check results: "id|category|severity|message|fixable|fixed"
+    local _results=()
+    local _n_pass=0 _n_warn=0 _n_fail=0
+    local _overall="pass"
+
+    _dr_record() {
+        local _id="$1" _cat="$2" _sev="$3" _msg="$4" _fixable="${5:-false}" _fixed="${6:-false}"
+        _results+=("${_id}|${_cat}|${_sev}|${_msg}|${_fixable}|${_fixed}")
+        case "${_sev}" in
+            pass) _n_pass=$(( _n_pass + 1 )) ;;
+            warn) _n_warn=$(( _n_warn + 1 )); if [ "${_overall}" = "pass" ]; then _overall="warn"; fi ;;
+            fail) _n_fail=$(( _n_fail + 1 )); _overall="fail" ;;
+        esac
+    }
+
+    _dr_backup() {
+        local _f="$1"
+        [ -f "${_f}" ] || return 0
+        local _ts
+        _ts="$(date -u '+%Y%m%d%H%M%S')"
+        cp "${_f}" "${_f}.bak.${_ts}" 2>/dev/null || true
+    }
+
+    # --- Runtime checks ---
+    _dr_record "runtime.os" "runtime" "pass" "OS: ${OS:-unknown}"
+
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        local _pver
+        _pver="$(run_python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "?")"
+        _dr_record "runtime.python" "runtime" "pass" "Python ${_pver} via $(basename "$(python_provider_label 2>/dev/null || echo python3)")"
+        if run_python -c "import sys; assert sys.version_info.major == 3" >/dev/null 2>&1; then
+            _dr_record "runtime.python_version" "runtime" "pass" "Python version is 3.x"
+        else
+            _dr_record "runtime.python_version" "runtime" "fail" "Python found but not version 3" "false"
+        fi
+    else
+        _dr_record "runtime.python" "runtime" "fail" \
+            "Python 3 not found. Install from python.org or ensure py -3 works (Windows Git Bash)" \
+            "false"
+    fi
+
+    if command -v git >/dev/null 2>&1; then
+        _dr_record "runtime.git" "runtime" "pass" "Git available: $(git --version 2>/dev/null | awk '{print $3}')"
+    else
+        _dr_record "runtime.git" "runtime" "warn" "Git not found in PATH"
+    fi
+
+    local _lstack_bin="${CLAUDE_DIR}/bin"
+    case ":${PATH}:" in
+        *":${_lstack_bin}:"*) _dr_record "runtime.path" "runtime" "pass" "~/.claude/bin is in PATH" ;;
+        *) _dr_record "runtime.path" "runtime" "warn" "~/.claude/bin not in PATH -- add: export PATH=\"\$HOME/.claude/bin:\$PATH\"" ;;
+    esac
+
+    # Detect broken Windows Store Python stub
+    if [ "${OS:-linux}" = "windows" ] && command -v python >/dev/null 2>&1; then
+        local _py_loc
+        _py_loc="$(command -v python 2>/dev/null || true)"
+        case "${_py_loc}" in
+            */WindowsApps/*)
+                _dr_record "runtime.python_stub" "runtime" "fail" \
+                    "Windows Store Python stub detected at ${_py_loc} -- it does not work in Git Bash. Install real Python." "false"
+                ;;
+        esac
+    fi
+
+    # --- Installation checks ---
+    if [ -d "${CLAUDE_DIR}" ]; then
+        _dr_record "install.claude_dir" "installation" "pass" "~/.claude exists"
+    else
+        _dr_record "install.claude_dir" "installation" "fail" "~/.claude missing -- run the installer" "false"
+    fi
+
+    if [ -f "${CLAUDE_DIR}/bin/lstack" ]; then
+        _dr_record "install.lstack_bin" "installation" "pass" "~/.claude/bin/lstack exists"
+    else
+        _dr_record "install.lstack_bin" "installation" "fail" "~/.claude/bin/lstack missing -- reinstall" "false"
+    fi
+
+    # Hooks
+    for _hook in session-start pre-tool post-tool pre-compact stop; do
+        local _hf="${CLAUDE_DIR}/hooks/${_hook}.sh"
+        if [ ! -f "${_hf}" ]; then
+            _dr_record "install.hook.${_hook}" "installation" "fail" "Hook missing: hooks/${_hook}.sh" "false"
+        elif [ "${OS:-linux}" != "windows" ] && [ ! -x "${_hf}" ]; then
+            _dr_record "install.hook.${_hook}" "installation" "fail" \
+                "Hook not executable: hooks/${_hook}.sh" "true" \
+                "$([ "${do_fix}" = "true" ] && { chmod +x "${_hf}" && echo "true"; } || echo "false")"
+        else
+            _dr_record "install.hook.${_hook}" "installation" "pass" "Hook OK: hooks/${_hook}.sh"
+        fi
+    done
+
+    # settings.json
+    local _sj="${CLAUDE_DIR}/settings.json"
+    if [ ! -f "${_sj}" ]; then
+        if [ "${do_fix}" = "true" ]; then
+            bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${_sj}" 2>/dev/null || true
+            _dr_record "install.settings_json" "installation" "fail" "settings.json was missing -- regenerated" "true" "true"
+        else
+            _dr_record "install.settings_json" "installation" "fail" "settings.json missing -- run: lstack settings" "true"
+        fi
+    elif [ "${PYTHON_AVAILABLE:-false}" = "true" ] && ! run_python -m json.tool "${_sj}" >/dev/null 2>&1; then
+        if [ "${do_fix}" = "true" ]; then
+            _dr_backup "${_sj}"
+            bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${_sj}" 2>/dev/null || true
+            _dr_record "install.settings_json" "installation" "fail" "settings.json was invalid -- regenerated from backup" "true" "true"
+        else
+            _dr_record "install.settings_json" "installation" "fail" "settings.json invalid JSON -- run: lstack settings" "true"
+        fi
+    else
+        _dr_record "install.settings_json" "installation" "pass" "settings.json valid JSON"
+    fi
+
+    # Stop timeout check
+    if [ -f "${_sj}" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        local _stop_timeout
+        _stop_timeout="$(run_python -c "
+import json, sys
+try:
+    d = json.load(open('${_sj}'))
+    hooks = d.get('hooks', {})
+    for h in hooks.get('Stop', hooks.get('stop', [])):
+        t = h.get('timeout', 0)
+        if t: print(t); sys.exit(0)
+    print(0)
+except: print(0)
+" 2>/dev/null || echo "0")"
+        if [ "${_stop_timeout}" -ge 90 ] 2>/dev/null; then
+            _dr_record "install.stop_timeout" "installation" "pass" "Stop hook timeout: ${_stop_timeout}s"
+        else
+            if [ "${do_fix}" = "true" ]; then
+                _dr_backup "${_sj}"
+                bash "${CLAUDE_DIR}/scripts/gen-settings.sh" > "${_sj}" 2>/dev/null || true
+                _dr_record "install.stop_timeout" "installation" "fail" \
+                    "Stop timeout was ${_stop_timeout}s (need >=90) -- regenerated settings.json" "true" "true"
+            else
+                _dr_record "install.stop_timeout" "installation" "fail" \
+                    "Stop timeout is ${_stop_timeout}s, expected >=90 -- run: lstack doctor --fix" "true"
+            fi
+        fi
+    fi
+
+    # --- Memory checks ---
+    local _mem_dir="${CLAUDE_DIR}/memory"
+    if [ -d "${_mem_dir}" ]; then
+        _dr_record "memory.dir" "memory" "pass" "memory/ directory exists"
+    else
+        if [ "${do_fix}" = "true" ]; then
+            mkdir -p "${_mem_dir}"
+            _dr_record "memory.dir" "memory" "fail" "memory/ directory was missing -- created" "true" "true"
+        else
+            _dr_record "memory.dir" "memory" "fail" "memory/ directory missing -- run: lstack doctor --fix" "true"
+        fi
+    fi
+
+    local _log_dir="${CLAUDE_DIR}/logs"
+    if [ -d "${_log_dir}" ]; then
+        _dr_record "memory.log_dir" "memory" "pass" "logs/ directory exists"
+    else
+        if [ "${do_fix}" = "true" ]; then
+            mkdir -p "${_log_dir}"
+            _dr_record "memory.log_dir" "memory" "fail" "logs/ directory was missing -- created" "true" "true"
+        else
+            _dr_record "memory.log_dir" "memory" "fail" "logs/ directory missing -- run: lstack doctor --fix" "true"
+        fi
+    fi
+
+    local _db="${CLAUDE_DIR}/memory/lstack.db"
+    if [ -f "${_db}" ]; then
+        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            local _db_stats
+            _db_stats="$(run_python "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || true)"
+            if [ -n "${_db_stats}" ]; then
+                _dr_record "memory.db" "memory" "pass" "DB accessible: ${_db_stats}"
+            else
+                _dr_record "memory.db" "memory" "pass" "DB exists at ~/.claude/memory/lstack.db"
+            fi
+        else
+            _dr_record "memory.db" "memory" "pass" "DB exists (Python needed for stats)"
+        fi
+    else
+        if [ "${do_fix}" = "true" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            run_python "${DB_PY}" init >/dev/null 2>&1 || true
+            _dr_record "memory.db" "memory" "fail" "DB was missing -- initialized" "true" "true"
+        else
+            _dr_record "memory.db" "memory" "fail" \
+                "DB not initialized -- run: lstack memory stats (or lstack doctor --fix)" "true"
+        fi
+    fi
+
+    # --- Legacy checks (kept from original doctor) ---
     if [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
         local _lines
         _lines="$(wc -l < "${CLAUDE_DIR}/CLAUDE.md" | tr -d ' ')"
         if [ "${_lines}" -le 80 ]; then
-            _check_pass "CLAUDE.md present and under 80 lines (${_lines} lines)"
+            _dr_record "config.claude_md" "config" "pass" "CLAUDE.md present (${_lines} lines)"
         else
-            _check_fail "CLAUDE.md is ${_lines} lines (over 80) — edit and trim: \$EDITOR ~/.claude/CLAUDE.md"
+            _dr_record "config.claude_md" "config" "warn" \
+                "CLAUDE.md is ${_lines} lines (over 80) -- edit and trim: \$EDITOR ~/.claude/CLAUDE.md"
         fi
     else
-        _check_fail "CLAUDE.md missing — run: lstack settings"
+        _dr_record "config.claude_md" "config" "fail" "CLAUDE.md missing"
     fi
 
-    # settings.json valid JSON through os.sh avoids broken Windows stubs.
-    if [ -f "${CLAUDE_DIR}/settings.json" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ] && \
-       run_python -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
-        _check_pass "settings.json valid JSON"
-    else
-        _check_fail "settings.json invalid or missing — run: lstack settings"
-    fi
-
-    # All 5 hooks exist and are executable
-    local _hooks_ok=true
-    for _hook in session-start pre-tool post-tool pre-compact stop; do
-        local _hf="${CLAUDE_DIR}/hooks/${_hook}.sh"
-        if [ ! -f "${_hf}" ] || [ ! -x "${_hf}" ]; then
-            _hooks_ok=false
-            break
-        fi
-    done
-    if [ "${_hooks_ok}" = true ]; then
-        _check_pass "All 5 hooks exist and are executable"
-    else
-        _check_fail "One or more hooks missing or not executable — run: chmod +x ~/.claude/hooks/*.sh"
-    fi
-
-    # Python 3 (sourced from os.sh)
-    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
-        _check_pass "Python 3 found at: $(python_provider_label)"
-    else
-        _check_fail "Python 3 not found - install Python from python.org or make sure py -3 works in Git Bash"
-    fi
-
-    # DB initialized and accessible
-    local _db="${CLAUDE_DIR}/memory/lstack.db"
-    if [ -f "${_db}" ]; then
-        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
-            local _stats
-            _stats="$(run_python "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || true)"
-            if [ -n "${_stats}" ]; then
-                _check_pass "DB accessible: ${_stats}"
-            else
-                _check_pass "DB initialized at ~/.claude/memory/lstack.db"
-            fi
-        else
-            _check_pass "DB initialized at ~/.claude/memory/lstack.db"
-        fi
-    else
-        _check_fail "DB not initialized - run: lstack memory stats"
-    fi
-
-    # session-start.sh CLAUDE_HOME check
-    if [ -f "${CLAUDE_DIR}/hooks/session-start.sh" ]; then
-        if grep -q 'CLAUDE_HOME\|CLAUDE_DIR\|\.claude' "${CLAUDE_DIR}/hooks/session-start.sh" 2>/dev/null; then
-            _check_pass "session-start.sh references CLAUDE_HOME/CLAUDE_DIR"
-        else
-            _check_fail "session-start.sh: may be missing CLAUDE_HOME reference — run: lstack settings"
-        fi
-    fi
-
-    # git remote configured for upgrade
     if [ -d "${CLAUDE_DIR}/.git" ] && git -C "${CLAUDE_DIR}" remote get-url origin >/dev/null 2>&1; then
         local _remote
         _remote="$(git -C "${CLAUDE_DIR}" remote get-url origin 2>/dev/null)"
-        _check_pass "lstack upgrade available (remote: ${_remote})"
+        _dr_record "config.git_remote" "config" "pass" "git remote: ${_remote}"
     else
-        _check_fail "No git remote — upgrade disabled. Run: git -C ~/.claude remote add origin https://github.com/puukis/lstack"
+        _dr_record "config.git_remote" "config" "warn" "No git remote -- upgrade disabled"
     fi
 
-    # Context7 MCP in settings.json
     if [ -f "${CLAUDE_DIR}/settings.json" ] && grep -q 'context7' "${CLAUDE_DIR}/settings.json" 2>/dev/null; then
-        _check_pass "Context7 MCP configured in settings.json"
+        _dr_record "config.mcp_context7" "config" "pass" "Context7 MCP configured"
     else
-        _check_fail "Context7 MCP not found in settings.json — run: lstack settings"
+        _dr_record "config.mcp_context7" "config" "warn" "Context7 MCP not in settings.json -- run: lstack settings"
     fi
 
-    # statusline script present and executable
     local _sl_sh="${CLAUDE_DIR}/scripts/statusline.sh"
     local _sl_py="${CLAUDE_DIR}/scripts/statusline.py"
     if ( [ -f "${_sl_sh}" ] && [ -x "${_sl_sh}" ] ) || [ -f "${_sl_py}" ]; then
-        _check_pass "statusline script present"
+        _dr_record "config.statusline" "config" "pass" "statusline script present"
     else
-        _check_fail "statusline script not executable — run: chmod +x ~/.claude/scripts/statusline.sh"
+        if [ "${do_fix}" = "true" ] && [ -f "${_sl_sh}" ]; then
+            chmod +x "${_sl_sh}" 2>/dev/null || true
+            _dr_record "config.statusline" "config" "fail" "statusline not executable -- fixed" "true" "true"
+        else
+            _dr_record "config.statusline" "config" "fail" \
+                "statusline script not executable -- run: chmod +x ~/.claude/scripts/statusline.sh" "true"
+        fi
+    fi
+
+    # --- Deep checks ---
+    if [ "${do_deep}" = "true" ]; then
+        for _hf in "${CLAUDE_DIR}/hooks/"*.sh; do
+            [ -f "${_hf}" ] || continue
+            local _bn
+            _bn="$(basename "${_hf}")"
+            if bash -n "${_hf}" 2>/dev/null; then
+                _dr_record "deep.hook_syntax.${_bn}" "deep" "pass" "bash -n hooks/${_bn}: OK"
+            else
+                _dr_record "deep.hook_syntax.${_bn}" "deep" "fail" "bash -n hooks/${_bn}: syntax error"
+            fi
+        done
+
+        if [ -f "${CLAUDE_DIR}/settings.json" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            local _settings_content
+            _settings_content="$(cat "${CLAUDE_DIR}/settings.json" 2>/dev/null || true)"
+            local _home_esc
+            _home_esc="$(printf '%s' "${HOME}" | sed 's|/|\\/|g')"
+            if printf '%s' "${_settings_content}" | grep -q "${HOME}" 2>/dev/null; then
+                _dr_record "deep.settings_hardcoded_paths" "deep" "warn" \
+                    "settings.json appears to contain an absolute HOME path -- check for portability"
+            else
+                _dr_record "deep.settings_hardcoded_paths" "deep" "pass" \
+                    "settings.json: no obvious hardcoded home path detected"
+            fi
+        fi
+    fi
+
+    # --- Output ---
+    # Pure-bash split: sets _rid _rcat _rsev _rmsg _rfixable _rfixed from "a|b|c|d|e|f"
+    _dr_split() {
+        local _s="$1"
+        _rid="${_s%%|*}";      _s="${_s#*|}"
+        _rcat="${_s%%|*}";     _s="${_s#*|}"
+        _rsev="${_s%%|*}";     _s="${_s#*|}"
+        _rmsg="${_s%%|*}";     _s="${_s#*|}"
+        _rfixable="${_s%%|*}"; _s="${_s#*|}"
+        _rfixed="${_s}"
+    }
+
+    if [ "${do_json}" = "true" ]; then
+        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            # Pass header line then result records via stdin; single-quoted Python
+            # avoids bash variable expansion and the true/false Python NameError.
+            {
+                printf '%s|%s|%s|%s\n' "${_overall}" "${_n_pass}" "${_n_warn}" "${_n_fail}"
+                if [ "${#_results[@]}" -gt 0 ]; then
+                    for _r in "${_results[@]}"; do printf '%s\n' "${_r}"; done
+                fi
+            } | run_python -c '
+import json, sys
+lines = sys.stdin.read().splitlines()
+header = lines[0].split("|") if lines else ["pass", "0", "0", "0"]
+overall = header[0]
+n_pass, n_warn, n_fail = int(header[1]), int(header[2]), int(header[3])
+checks = []
+for line in lines[1:]:
+    if not line:
+        continue
+    parts = line.split("|", 5)
+    if len(parts) < 6:
+        continue
+    ci, cc, cs, cm, cf, cfx = parts
+    checks.append({"id": ci, "category": cc, "severity": cs, "message": cm,
+                   "fixable": cf == "true", "fixed": cfx == "true"})
+print(json.dumps({"status": overall, "checks": checks,
+                  "summary": {"pass": n_pass, "warn": n_warn, "fail": n_fail}}, indent=2))
+'
+        else
+            printf '{"status":"%s","error":"Python unavailable for full JSON output","summary":{"pass":%d,"warn":%d,"fail":%d}}\n' \
+                "${_overall}" "${_n_pass}" "${_n_warn}" "${_n_fail}"
+        fi
+        return 0
+    fi
+
+    # Human output
+    printf 'lstack doctor\n\n'
+    local _cur_cat="" _rid _rcat _rsev _rmsg _rfixable _rfixed
+    if [ "${#_results[@]}" -gt 0 ]; then
+        for _r in "${_results[@]}"; do
+            _dr_split "${_r}"
+            if [ "${_rcat}" != "${_cur_cat}" ]; then
+                _cur_cat="${_rcat}"
+                printf '\n%s\n' "$(printf '%s' "${_rcat}" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+            fi
+            case "${_rsev}" in
+                pass) printf '  [\033[32mPASS\033[0m] %s\n' "${_rmsg}" ;;
+                warn) printf '  [\033[33mWARN\033[0m] %s\n' "${_rmsg}" ;;
+                fail)
+                    printf '  [\033[31mFAIL\033[0m] %s\n' "${_rmsg}"
+                    if [ "${_rfixable}" = "true" ] && [ "${_rfixed}" = "false" ]; then
+                        printf '         Fix: lstack doctor --fix\n'
+                    fi
+                    ;;
+            esac
+        done
     fi
 
     printf '\n'
-    if [ "${failures}" -eq 0 ]; then
+    printf 'Summary: %d passed, %d warnings, %d failed\n' "${_n_pass}" "${_n_warn}" "${_n_fail}"
+    if [ "${_n_fail}" -gt 0 ] && [ "${do_fix}" = "false" ]; then
+        printf "Run 'lstack doctor --fix' to repair fixable issues.\n"
+    elif [ "${_n_fail}" -eq 0 ] && [ "${_n_warn}" -eq 0 ]; then
         printf 'lstack is healthy.\n'
-    else
-        printf '\033[33m%d check(s) failed.\033[0m Run the fix commands above, then restart Claude Code.\n' "${failures}"
     fi
+    [ "${_n_fail}" -gt 0 ] && return 1 || return 0
 }
 
 cmd_onboard() {
@@ -1172,6 +1540,396 @@ cmd_mcp() {
     run_python "${CLAUDE_DIR}/scripts/mcp_server.py"
 }
 
+cmd_health() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    if [ -f "${CLAUDE_DIR}/scripts/runtime.sh" ]; then
+        # shellcheck source=scripts/runtime.sh
+        source "${CLAUDE_DIR}/scripts/runtime.sh"
+    fi
+
+    local do_json=false do_save=true do_history=false do_compare=false
+    local do_configure=false do_detect=false timeout_per_tool=120
+    for _a in "$@"; do
+        case "${_a}" in
+            --json)      do_json=true ;;
+            --save)      do_save=true ;;
+            --no-save)   do_save=false ;;
+            --history)   do_history=true ;;
+            --compare)   do_compare=true ;;
+            --configure) do_configure=true ;;
+            --detect)    do_detect=true ;;
+            --fast)      timeout_per_tool=30 ;;
+            --full)      timeout_per_tool=300 ;;
+        esac
+    done
+
+    # History display
+    if [ "${do_history}" = "true" ]; then
+        local _hf="${CLAUDE_DIR}/memory/health-history.jsonl"
+        if [ ! -f "${_hf}" ]; then
+            printf 'No health history found.\n'
+            return 0
+        fi
+        printf 'Health history\n\n'
+        printf '%-20s %-6s %-20s\n' "Date" "Score" "Branch"
+        printf '%-20s %-6s %-20s\n' "----" "-----" "------"
+        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            run_python -c "
+import json, sys
+lines = open('${_hf}').readlines()
+for line in reversed(lines[-10:]):
+    try:
+        d = json.loads(line)
+        ts = d.get('ts','?')[:16].replace('T',' ')
+        score = d.get('score','?')
+        branch = d.get('branch','-')
+        print(f'{ts:<20} {score:<6} {branch}')
+    except: pass
+" 2>/dev/null || tail -10 "${_hf}"
+        else
+            tail -10 "${_hf}"
+        fi
+        return 0
+    fi
+
+    # Find project root
+    local _proj_root
+    _proj_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    local _proj_name
+    _proj_name="$(basename "${_proj_root}")"
+    local _branch=""
+    _branch="$(git -C "${_proj_root}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-")"
+    local _commit=""
+    _commit="$(git -C "${_proj_root}" rev-parse --short HEAD 2>/dev/null || echo "")"
+    local _ts
+    _ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "")"
+
+    # Parse Health Stack or Build & Test section from .claude/CLAUDE.md
+    # Pass path via sys.argv so MSYS2 converts POSIX path to Windows for native Python.
+    local _claude_md="${_proj_root}/.claude/CLAUDE.md"
+    declare -A _hs_commands
+    if [ -f "${_claude_md}" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        local _parsed
+        _parsed="$(run_python -c '
+import re, sys
+try:
+    content = open(sys.argv[1]).read()
+    m = re.search(r"##\s+Health Stack\s*\n(.*?)(?=\n##|\Z)", content, re.DOTALL)
+    if not m:
+        m = re.search(r"##\s+Build\s*&\s*Test\s*\n(.*?)(?=\n##|\Z)", content, re.DOTALL)
+    if m:
+        for line in m.group(1).splitlines():
+            line = line.strip()
+            if ":" in line and not line.startswith("#"):
+                k, _, v = line.partition(":")
+                k = k.strip(); v = v.strip()
+                if k and v:
+                    print(k + "=" + v)
+except Exception:
+    pass
+' "${_claude_md}" 2>/dev/null || true)"
+        while IFS='=' read -r _k _v; do
+            [ -n "${_k}" ] && [ -n "${_v}" ] && _hs_commands["${_k}"]="${_v}"
+        done <<< "${_parsed}"
+    fi
+
+    # Auto-detect tools if no Health Stack config
+    _detect_health_tools() {
+        # Shell check - always available if bash exists
+        local _sh_scripts=""
+        for _d in hooks scripts; do
+            [ -d "${_proj_root}/${_d}" ] && ls "${_proj_root}/${_d}"/*.sh >/dev/null 2>&1 && \
+                _sh_scripts="${_sh_scripts} ${_proj_root}/${_d}/*.sh"
+        done
+        if [ -n "${_sh_scripts}" ]; then
+            if command -v shellcheck >/dev/null 2>&1; then
+                echo "shell=shellcheck${_sh_scripts}"
+            else
+                echo "shell=bash -n ${_sh_scripts# }"
+            fi
+        fi
+
+        # Node -- pass path via sys.argv so MSYS2 converts POSIX to Windows for Python
+        if [ -f "${_proj_root}/package.json" ]; then
+            local _pm="npm"
+            [ -f "${_proj_root}/pnpm-lock.yaml" ] && _pm="pnpm"
+            { [ -f "${_proj_root}/bun.lock" ] || [ -f "${_proj_root}/bun.lockb" ]; } && _pm="bun"
+            [ -f "${_proj_root}/yarn.lock" ] && _pm="yarn"
+            if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+                run_python -c '
+import json, sys
+try:
+    pkg_path = sys.argv[1]
+    pm = sys.argv[2]
+    scripts = json.load(open(pkg_path)).get("scripts", {})
+    for k, cat in [("test","tests"),("typecheck","typecheck"),("lint","lint"),
+                   ("build","build"),("format:check","format"),("check","lint")]:
+        if k in scripts:
+            print(cat + "=" + (pm + " test" if k == "test" else pm + " run " + k))
+except Exception:
+    pass
+' "${_proj_root}/package.json" "${_pm}" 2>/dev/null || true
+            fi
+        fi
+
+        # Python
+        if [ -f "${_proj_root}/pyproject.toml" ] || [ -f "${_proj_root}/requirements.txt" ] || [ -f "${_proj_root}/setup.py" ]; then
+            command -v pytest >/dev/null 2>&1 && echo "tests=pytest"
+            command -v ruff  >/dev/null 2>&1 && echo "lint=ruff check ."
+            command -v mypy  >/dev/null 2>&1 && echo "typecheck=mypy ."
+        fi
+
+        # Go
+        if [ -f "${_proj_root}/go.mod" ]; then
+            command -v go >/dev/null 2>&1 && echo "tests=go test ./..." && echo "build=go build ./..."
+        fi
+
+        # Rust
+        if [ -f "${_proj_root}/Cargo.toml" ]; then
+            command -v cargo >/dev/null 2>&1 && echo "tests=cargo test" && echo "build=cargo build" && echo "lint=cargo clippy"
+        fi
+    }
+
+    # Merge: Health Stack takes precedence over auto-detect
+    declare -A _tools
+    while IFS='=' read -r _k _v; do
+        [ -n "${_k}" ] && [ -n "${_v}" ] && _tools["${_k}"]="${_v}"
+    done <<< "$(_detect_health_tools)"
+    for _k in "${!_hs_commands[@]}"; do
+        _tools["${_k}"]="${_hs_commands[${_k}]}"
+    done
+
+    # Detect-only mode
+    if [ "${do_detect}" = "true" ] || [ "${do_configure}" = "true" ]; then
+        printf 'Detected health tools for: %s\n\n' "${_proj_name}"
+        for _k in "${!_tools[@]}"; do
+            printf '  %-14s %s\n' "${_k}:" "${_tools[${_k}]}"
+        done
+        if [ "${do_configure}" = "true" ] && [ -t 0 ]; then
+            printf '\nWrite Health Stack section to %s? [y/N] ' "${_claude_md}"
+            read -r _ans
+            if [ "${_ans}" = "y" ] || [ "${_ans}" = "Y" ]; then
+                mkdir -p "$(dirname "${_claude_md}")"
+                if [ -f "${_claude_md}" ] && grep -q '## Health Stack' "${_claude_md}" 2>/dev/null; then
+                    printf 'Health Stack section already exists in %s\n' "${_claude_md}"
+                else
+                    local _ts_bak
+                    _ts_bak="$(date -u '+%Y%m%d%H%M%S')"
+                    [ -f "${_claude_md}" ] && cp "${_claude_md}" "${_claude_md}.bak.${_ts_bak}"
+                    {
+                        printf '\n## Health Stack\n'
+                        for _k in "${!_tools[@]}"; do
+                            printf '%s: %s\n' "${_k}" "${_tools[${_k}]}"
+                        done
+                    } >> "${_claude_md}"
+                    printf 'Health Stack section added to %s\n' "${_claude_md}"
+                fi
+            fi
+        fi
+        return 0
+    fi
+
+    # Default weights
+    declare -A _weights
+    _weights=(["typecheck"]=22 ["tests"]=28 ["lint"]=18 ["build"]=12 ["format"]=8 ["deadcode"]=6 ["shell"]=6)
+
+    # Run tools and collect results
+    declare -A _scores _statuses _commands _exit_codes _durations _summaries
+
+    _run_health_tool() {
+        local _name="$1" _cmd="$2" _timeout="$3"
+        local _start _end _output _rc
+
+        _start="$(date +%s 2>/dev/null || echo 0)"
+        if command -v timeout >/dev/null 2>&1; then
+            _output="$(timeout "${_timeout}" bash -c "cd '${_proj_root}' && ${_cmd}" 2>&1)" || true
+            _rc=$?
+            # timeout exits 124 on timeout
+        elif [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            _output="$(run_python -c "
+import subprocess, sys
+try:
+    r = subprocess.run('${_cmd}', shell=True, capture_output=True, text=True, timeout=${_timeout}, cwd='${_proj_root}')
+    sys.stdout.write(r.stdout + r.stderr)
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    sys.stdout.write('TIMEOUT')
+    sys.exit(124)
+" 2>&1)" || true
+            _rc=$?
+        else
+            _output="$(bash -c "cd '${_proj_root}' && ${_cmd}" 2>&1)" || true
+            _rc=$?
+        fi
+        _end="$(date +%s 2>/dev/null || echo 0)"
+        _output="$(printf '%s' "${_output}" | tail -80)"
+
+        local _score
+        if [ "${_rc}" -eq 0 ]; then
+            _score=10
+        elif [ "${_rc}" -eq 124 ]; then
+            _score=0
+        else
+            local _err_count
+            _err_count="$(printf '%s' "${_output}" | grep -ciE 'error|fail|FAIL' 2>/dev/null || echo 0)"
+            if [ "${_err_count}" -le 3 ]; then _score=7
+            elif [ "${_err_count}" -le 10 ]; then _score=4
+            else _score=0; fi
+        fi
+
+        local _dur=$(( _end - _start ))
+        local _summary
+        if [ "${_rc}" -eq 124 ]; then
+            _summary="TIMEOUT after ${_timeout}s"
+        elif [ "${_rc}" -eq 0 ]; then
+            _summary="ok"
+        else
+            local _ec
+            _ec="$(printf '%s' "${_output}" | grep -ciE 'error|fail|FAIL' 2>/dev/null || echo "?")"
+            _summary="${_ec} error(s)"
+        fi
+
+        _scores["${_name}"]=${_score}
+        _statuses["${_name}"]="${_rc}"
+        _commands["${_name}"]="${_cmd}"
+        _exit_codes["${_name}"]=${_rc}
+        _durations["${_name}"]=${_dur}
+        _summaries["${_name}"]="${_summary}"
+    }
+
+    _score_label() {
+        local _s="$1"
+        if   [ "${_s}" -ge 10 ]; then echo "CLEAN"
+        elif [ "${_s}" -ge 7 ];  then echo "WARNING"
+        elif [ "${_s}" -ge 4 ];  then echo "NEEDS WORK"
+        else echo "CRITICAL"; fi
+    }
+
+    for _cat in "${!_tools[@]}"; do
+        _run_health_tool "${_cat}" "${_tools[${_cat}]}" "${timeout_per_tool}"
+    done
+
+    # Compute composite score
+    local _total_score=0 _total_weight=0
+    local _recommendations=()
+
+    for _cat in "${!_scores[@]}"; do
+        local _w="${_weights[${_cat}]:-5}"
+        _total_score=$(( _total_score + _scores["${_cat}"] * _w ))
+        _total_weight=$(( _total_weight + _w ))
+        if [ "${_scores[${_cat}]}" -lt 10 ]; then
+            case "${_scores[${_cat}]}" in
+                7|8|9) _recommendations+=("Fix ${_exit_codes[${_cat}]} issue(s) in ${_cat} (${_tools[${_cat}]}).") ;;
+                0|1|2|3|4|5|6) _recommendations+=("Critical: fix ${_cat} failures (${_tools[${_cat}]}).") ;;
+            esac
+        fi
+    done
+
+    if [ ${#_tools[@]} -eq 0 ]; then
+        _recommendations+=("No health tools detected. Add a '## Health Stack' section to .claude/CLAUDE.md.")
+    fi
+
+    local _composite="0"
+    if [ "${_total_weight}" -gt 0 ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        _composite="$(run_python -c "print(f'{${_total_score}/${_total_weight}:.1f}')" 2>/dev/null || echo "0")"
+    fi
+
+    # JSON output
+    if [ "${do_json}" = "true" ]; then
+        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+            run_python -c "
+import json, sys
+cats = {}
+$(for _cat in "${!_scores[@]}"; do
+    echo "cats['${_cat}'] = {'score': ${_scores[${_cat}]}, 'status': '$(_score_label "${_scores[${_cat}]}")', 'command': '${_commands[${_cat}]}', 'exit_code': ${_exit_codes[${_cat}]}, 'duration_s': ${_durations[${_cat}]}, 'summary': '${_summaries[${_cat}]}'}"
+done)
+recs = [$(for _r in "${_recommendations[@]:-}"; do printf "'%s'," "${_r}"; done)]
+print(json.dumps({'project':'${_proj_name}','branch':'${_branch}','commit_sha':'${_commit}','score':${_composite},'ts':'${_ts}','categories':cats,'recommendations':recs}, indent=2))
+" 2>/dev/null || printf '{"error":"JSON generation failed"}\n'
+        else
+            printf '{"project":"%s","branch":"%s","score":%s,"error":"Python unavailable for full JSON"}\n' \
+                "${_proj_name}" "${_branch}" "${_composite}"
+        fi
+        # Fall through to save
+        if [ "${do_save}" = "false" ]; then return 0; fi
+    fi
+
+    # Human output
+    if [ "${do_json}" = "false" ]; then
+        printf 'lstack health\n\n'
+        printf 'Project: %s\n' "${_proj_name}"
+        printf 'Branch:  %s\n' "${_branch}"
+        printf 'Date:    %s\n\n' "$(date '+%Y-%m-%d' 2>/dev/null || echo '?')"
+
+        if [ ${#_tools[@]} -eq 0 ]; then
+            printf 'No health tools detected in this project.\n'
+            printf 'Add a "## Health Stack" section to .claude/CLAUDE.md, or run:\n'
+            printf '  lstack health --configure\n\n'
+        else
+            printf '%-12s %-26s %-6s %-12s %-9s %s\n' \
+                "Category" "Tool" "Score" "Status" "Duration" "Details"
+            printf '%-12s %-26s %-6s %-12s %-9s %s\n' \
+                "--------" "----" "-----" "------" "--------" "-------"
+            for _cat in "${!_scores[@]}"; do
+                local _lbl
+                _lbl="$(_score_label "${_scores[${_cat}]}")"
+                local _cmd_short="${_commands[${_cat}]}"
+                [ ${#_cmd_short} -gt 24 ] && _cmd_short="${_cmd_short:0:21}..."
+                printf '%-12s %-26s %2d/10  %-12s %ds         %s\n' \
+                    "${_cat}" "${_cmd_short}" "${_scores[${_cat}]}" "${_lbl}" \
+                    "${_durations[${_cat}]}" "${_summaries[${_cat}]}"
+            done
+        fi
+
+        printf '\nComposite score: %s / 10\n' "${_composite}"
+
+        if [ ${#_recommendations[@]} -gt 0 ]; then
+            printf '\nTop recommendations:\n'
+            local _ri=1
+            for _rec in "${_recommendations[@]}"; do
+                printf '  %d. %s\n' "${_ri}" "${_rec}"
+                _ri=$(( _ri + 1 ))
+            done
+        fi
+    fi
+
+    # Compare mode
+    if [ "${do_compare}" = "true" ] && [ -f "${CLAUDE_DIR}/memory/health-history.jsonl" ] && \
+       [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        printf '\nComparison with previous:\n'
+        run_python -c "
+import json
+lines = [l for l in open('${CLAUDE_DIR}/memory/health-history.jsonl') if '${_proj_name}' in l]
+if lines:
+    prev = json.loads(lines[-1])
+    curr = ${_composite}
+    prev_score = prev.get('score', 0)
+    diff = curr - prev_score
+    sign = '+' if diff >= 0 else ''
+    print(f'  Current:  {curr}  ({\"${_branch}\"})')
+    print(f'  Previous: {prev_score}  ({prev.get(\"branch\",\"?\")})')
+    print(f'  Change:   {sign}{diff:.1f}  ({\"improving\" if diff > 0 else \"declining\" if diff < 0 else \"stable\"})')
+else:
+    print('  No previous history for this project.')
+" 2>/dev/null || true
+    fi
+
+    # Save history
+    if [ "${do_save}" = "true" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        local _hf="${CLAUDE_DIR}/memory/health-history.jsonl"
+        mkdir -p "$(dirname "${_hf}")"
+        run_python -c "
+import json
+rec = {'ts':'${_ts}','project':'${_proj_name}','branch':'${_branch}','commit_sha':'${_commit}',
+       'score':${_composite},
+       'category_scores':{ $(for _cat in "${!_scores[@]}"; do printf "'%s':%d," "${_cat}" "${_scores[${_cat}]}"; done) },
+       'duration_s':$(( $(date +%s 2>/dev/null || echo 0) - $(date +%s 2>/dev/null || echo 0) ))}
+with open('${_hf}', 'a') as f:
+    f.write(json.dumps(rec) + '\n')
+" 2>/dev/null || true
+    fi
+}
+
 cmd_settings() {
     out="${CLAUDE_DIR}/settings.json"
     echo "Regenerating ${out} for current OS..."
@@ -1196,7 +1954,9 @@ shift 2>/dev/null || true
 case "${cmd}" in
     init)      cmd_init "$@" ;;
     settings)  cmd_settings "$@" ;;
+    runtime)   cmd_runtime "$@" ;;
     doctor)    cmd_doctor "$@" ;;
+    health)    cmd_health "$@" ;;
     onboard)   cmd_onboard "$@" ;;
     memory)    cmd_memory "$@" ;;
     search)    cmd_search "$@" ;;
@@ -1213,6 +1973,7 @@ case "${cmd}" in
     forget)    cmd_forget "$@" ;;
     edit)      cmd_edit "$@" ;;
     analytics) cmd_analytics "$@" ;;
+    brain)     cmd_brain "$@" ;;
     learn)     cmd_learn "$@" ;;
     mcp)       cmd_mcp "$@" ;;
     sync)      cmd_sync "$@" ;;
