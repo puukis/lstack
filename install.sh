@@ -215,6 +215,110 @@ check_pass() { printf "  ${SUCCESS}✓${NC}  %-42s ${MUTED}OK${NC}\n" "$1"; }
 check_fail() { printf "  ${ERROR}✗${NC}  %-42s ${ERROR}FAIL${NC}\n" "$1"; }
 check_warn() { printf "  ${WARN}⚠${NC}  %-42s ${WARN}WARN${NC}\n" "$1"; }
 
+PYTHON_AVAILABLE=false
+PYTHON_EXE=""
+PYTHON_MODE=""
+
+_install_os() {
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        MSYS*|CYGWIN*|MINGW*) echo "windows" ;;
+        Darwin) echo "macos" ;;
+        *) echo "linux" ;;
+    esac
+}
+
+_valid_python_exe() {
+    local exe="$1"
+    [ -n "${exe}" ] || return 1
+    "${exe}" -c 'import sys; print(sys.version_info.major)' 2>/dev/null | grep -qx '3' || return 1
+    "${exe}" -c 'import json; print(json.dumps({"ok": True}))' >/dev/null 2>&1 || return 1
+}
+
+_valid_py_launcher() {
+    command -v py >/dev/null 2>&1 || return 1
+    py -3 -c 'import sys; print(sys.version_info.major)' 2>/dev/null | grep -qx '3' || return 1
+    py -3 -c 'import json; print(json.dumps({"ok": True}))' >/dev/null 2>&1 || return 1
+}
+
+_detect_python() {
+    local exe pattern
+    for exe in python3 python; do
+        if command -v "${exe}" >/dev/null 2>&1 && _valid_python_exe "${exe}"; then
+            PYTHON_AVAILABLE=true
+            PYTHON_EXE="$(command -v "${exe}" 2>/dev/null || printf '%s\n' "${exe}")"
+            PYTHON_MODE="exe"
+            return 0
+        fi
+    done
+    if [ "$(_install_os)" = "windows" ] && _valid_py_launcher; then
+        PYTHON_AVAILABLE=true
+        PYTHON_MODE="py-launcher"
+        PYTHON_EXE=""
+        return 0
+    fi
+    for pattern in \
+        '/c/Python*/python.exe' \
+        '/c/Users/*/AppData/Local/Programs/Python/Python*/python.exe'; do
+        while IFS= read -r exe; do
+            [ -n "${exe}" ] || continue
+            if [ -f "${exe}" ] && _valid_python_exe "${exe}"; then
+                PYTHON_AVAILABLE=true
+                PYTHON_EXE="${exe}"
+                PYTHON_MODE="exe"
+                return 0
+            fi
+        done <<EOF
+$(compgen -G "${pattern}" 2>/dev/null || true)
+EOF
+    done
+    for exe in /usr/local/bin/python3 /usr/bin/python3; do
+        if [ -f "${exe}" ] && _valid_python_exe "${exe}"; then
+            PYTHON_AVAILABLE=true
+            PYTHON_EXE="${exe}"
+            PYTHON_MODE="exe"
+            return 0
+        fi
+    done
+    return 1
+}
+
+_run_python() {
+    if [ "${PYTHON_MODE}" = "py-launcher" ]; then
+        if [ "$#" -gt 0 ]; then
+            case "$1" in
+                -*) py -3 "$@" ;;
+                /[A-Za-z]/*)
+                    local first
+                    if command -v cygpath >/dev/null 2>&1; then
+                        first="$(cygpath -w "$1" 2>/dev/null || printf '%s\n' "$1")"
+                    else
+                        first="$(printf '%s:%s\n' "$(printf '%s' "$1" | cut -c2 | tr '[:lower:]' '[:upper:]')" "$(printf '%s' "$1" | cut -c3-)")"
+                    fi
+                    shift
+                    py -3 "${first}" "$@"
+                    ;;
+                *) py -3 "$@" ;;
+            esac
+        else
+            py -3
+        fi
+    elif [ -n "${PYTHON_EXE}" ]; then
+        "${PYTHON_EXE}" "$@"
+    else
+        return 127
+    fi
+}
+
+_python_label() {
+    if [ "${PYTHON_MODE}" = "py-launcher" ]; then
+        printf '%s\n' 'py -3'
+    elif [ -n "${PYTHON_EXE}" ]; then
+        printf '%s\n' "${PYTHON_EXE}"
+    else
+        printf '%s\n' 'unavailable'
+    fi
+}
+
 # ─── Spinner (pure bash fallback when gum unavailable) ────────────────────────
 
 _spin_pid=''
@@ -472,12 +576,13 @@ else
     _prereq_failures=$(( _prereq_failures + 1 ))
 fi
 
-_py_path="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-if [ -n "${_py_path}" ]; then
-    _py_ver="$("${_py_path}" --version 2>&1 | awk '{print $2}')"
-    check_pass "python (${_py_ver})"
+_detect_python || true
+if [ "${PYTHON_AVAILABLE}" = "true" ]; then
+    _py_ver="$(_run_python --version 2>&1 | awk '{print $2}')"
+    check_pass "python (${_py_ver}, $(_python_label))"
 else
-    check_warn "python3 not found — persistent DB will be skipped"
+    check_fail "Python 3 not found - install Python from python.org or make sure py -3 works in Git Bash"
+    _prereq_failures=$(( _prereq_failures + 1 ))
 fi
 
 _bash_ver="$(bash --version 2>/dev/null | head -1 | sed 's/.*version //' | sed 's/ .*//')"
@@ -569,7 +674,7 @@ ui_success "Executable bits set"
 _run_quiet "Generating settings.json for ${_OS_NAME}" \
     bash -c "bash '${CLAUDE_DIR}/scripts/gen-settings.sh' > '${CLAUDE_DIR}/settings.json'"
 
-if python3 -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
+if _run_python -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
     ui_success "settings.json generated and validated"
 else
     ui_error "settings.json failed JSON validation"
@@ -663,13 +768,14 @@ _scaffold_file "${CLAUDE_DIR}/memory/projects.md" "projects.md" \
 
 ui_stage "Initializing persistent memory database"
 
-if [ -n "${_py_path}" ]; then
+if [ "${PYTHON_AVAILABLE}" = "true" ]; then
     _run_quiet "Initializing lstack.db" \
-        bash -c "'${_py_path}' '${CLAUDE_DIR}/scripts/db.py' init 2>/dev/null || true"
+        _run_python "${CLAUDE_DIR}/scripts/db.py" init
     ui_success "Persistent DB ready at ~/.claude/memory/lstack.db"
 else
-    ui_warn "python3 not found — DB init skipped"
-    ui_info "Fix: install Python 3, then run: python3 ~/.claude/scripts/db.py init"
+    ui_error "Python unavailable after install"
+    ui_info "Fix: install Python from python.org or make sure py -3 works in Git Bash"
+    exit 1
 fi
 
 # ─── Step 7b: MCP registration ────────────────────────────────────────────────
@@ -677,11 +783,17 @@ fi
 ui_stage "Registering lstack MCP server"
 
 if command -v claude &>/dev/null; then
-    claude mcp add lstack -- python3 "${CLAUDE_DIR}/scripts/mcp_server.py" \
+    if [ "${PYTHON_MODE}" = "py-launcher" ]; then
+        claude mcp add lstack -- py -3 "${CLAUDE_DIR}/scripts/mcp_server.py" \
         2>/dev/null && ui_success "lstack MCP registered" \
-        || ui_warn "MCP registration failed — run: claude mcp add lstack"
+        || ui_warn "MCP registration failed - run: claude mcp add lstack"
+    else
+        claude mcp add lstack -- "${PYTHON_EXE}" "${CLAUDE_DIR}/scripts/mcp_server.py" \
+        2>/dev/null && ui_success "lstack MCP registered" \
+        || ui_warn "MCP registration failed - run: claude mcp add lstack"
+    fi
 else
-    ui_info "claude CLI not found — skipping MCP registration"
+    ui_info "claude CLI not found - skipping MCP registration"
     ui_info "After installing Claude Code, run: lstack mcp"
 fi
 
@@ -745,24 +857,25 @@ else
     _failures=$(( _failures + 1 ))
 fi
 
-if python3 -m json.tool "${CLAUDE_DIR}/settings.json" &>/dev/null; then
+if _run_python -m json.tool "${CLAUDE_DIR}/settings.json" &>/dev/null; then
     check_pass "settings.json valid JSON"
 else
     check_fail "settings.json invalid"
     _failures=$(( _failures + 1 ))
 fi
 
-if [ -n "${_py_path}" ]; then
+if [ "${PYTHON_AVAILABLE}" = "true" ]; then
     check_pass "Python 3 available"
 else
-    check_warn "Python 3 not found"
+    check_fail "Python 3 not found"
+    _failures=$(( _failures + 1 ))
 fi
 
-if [ -n "${_py_path}" ] && "${_py_path}" "${CLAUDE_DIR}/scripts/db.py" stats &>/dev/null; then
+if [ "${PYTHON_AVAILABLE}" = "true" ] && _run_python "${CLAUDE_DIR}/scripts/db.py" stats &>/dev/null; then
     check_pass "Persistent DB accessible"
 else
     check_fail "Persistent DB not accessible"
-    ui_info "Fix: python3 ~/.claude/scripts/db.py init"
+    ui_info "Fix: install Python from python.org or make sure py -3 works in Git Bash, then run: lstack memory stats"
     _failures=$(( _failures + 1 ))
 fi
 
