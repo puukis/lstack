@@ -325,6 +325,57 @@ class LearningTests(unittest.TestCase):
         )
         self.assertIn("skipped", embed.stdout)
 
+    def test_observe_no_embed_inserts_observation(self):
+        env = os.environ.copy()
+        env["LSTACK_DB_PATH"] = str(Path(self.tmp.name) / "observe.db")
+        env["LSTACK_CONFIG_PATH"] = str(Path(self.tmp.name) / "observe-config.json")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(DB_PY),
+                "observe",
+                "s1",
+                "/repo/a",
+                "[operational/key] no embed insert",
+                "lstack-learning,operational,observed,key",
+                "--no-embed",
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn("ok", result.stdout)
+        con = sqlite3.connect(env["LSTACK_DB_PATH"])
+        count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+        con.close()
+        self.assertEqual(count, 1)
+
+    def test_lstack_no_embed_env_inserts_observation(self):
+        env = os.environ.copy()
+        env["LSTACK_DB_PATH"] = str(Path(self.tmp.name) / "observe-env.db")
+        env["LSTACK_CONFIG_PATH"] = str(Path(self.tmp.name) / "observe-env-config.json")
+        env["LSTACK_NO_EMBED"] = "1"
+        subprocess.run(
+            [
+                sys.executable,
+                str(DB_PY),
+                "observe",
+                "s1",
+                "/repo/a",
+                "[tool/key] env no embed insert",
+                "lstack-learning,tool,observed,key",
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        con = sqlite3.connect(env["LSTACK_DB_PATH"])
+        count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+        con.close()
+        self.assertEqual(count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

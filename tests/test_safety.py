@@ -25,8 +25,17 @@ def bash_path(path):
     value = Path(path).resolve().as_posix()
     match = re.match(r"^([A-Za-z]):/(.*)$", value)
     if match:
+        if Path("C:/Program Files/Git/bin/bash.exe").exists():
+            return f"/{match.group(1).lower()}/{match.group(2)}"
         return f"/mnt/{match.group(1).lower()}/{match.group(2)}"
     return value
+
+
+def find_bash():
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    if git_bash.exists():
+        return str(git_bash)
+    return shutil.which("bash")
 
 
 def load_safety():
@@ -160,8 +169,8 @@ class FreezeTests(SafetyTestCase):
         self.assertIsNone(result)
 
     def test_windows_git_bash_path_normalization(self):
-        git_bash = self.safety.normalize_path("/c/Users/Leo/repo/src")
-        windows = self.safety.normalize_path("C:/Users/Leo/repo/src")
+        git_bash = self.safety.normalize_path("/c/Users/Example/repo/src")
+        windows = self.safety.normalize_path("C:/Users/Example/repo/src")
         self.assertEqual(git_bash.key, windows.key)
 
 
@@ -330,7 +339,7 @@ class CliTests(SafetyTestCase):
             ]
         )
         result = subprocess.run(
-            ["bash", "-c", command],
+            [find_bash(), "-c", command],
             cwd=self.project,
             env=env,
             text=True,
@@ -339,7 +348,7 @@ class CliTests(SafetyTestCase):
         )
         return result.stdout
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for CLI smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for CLI smoke tests")
     def test_lstack_safety_status_and_freeze_unfreeze(self):
         self.run_lstack("safety", "careful")
         status = self.run_lstack("safety", "status")
@@ -375,7 +384,7 @@ class HookSmokeTests(SafetyTestCase):
             ]
         )
         return subprocess.run(
-            ["bash", "-c", command],
+            [find_bash(), "-c", command],
             input=json.dumps(payload),
             cwd=self.project,
             env=env,
@@ -383,13 +392,13 @@ class HookSmokeTests(SafetyTestCase):
             capture_output=True,
         )
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for hook smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for hook smoke tests")
     def test_hook_allows_harmless_bash_silently(self):
         proc = self.run_hook({"tool_name": "Bash", "tool_input": {"command": "echo ok"}})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "")
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for hook smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for hook smoke tests")
     def test_hook_denies_write_outside_freeze_with_json(self):
         self.set_freeze(["src"])
         proc = self.run_hook(
@@ -399,7 +408,7 @@ class HookSmokeTests(SafetyTestCase):
         self.assertIn('"permissionDecision":"deny"', proc.stdout)
         self.assertIn("Freeze active", proc.stdout)
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for hook smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for hook smoke tests")
     def test_hook_allows_multiedit_inside_freeze_silently(self):
         self.set_freeze(["src"])
         proc = self.run_hook(
@@ -408,7 +417,7 @@ class HookSmokeTests(SafetyTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "")
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for hook smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for hook smoke tests")
     def test_hook_asks_for_careful_risky_bash(self):
         self.set_safety("careful")
         proc = self.run_hook({"tool_name": "Bash", "tool_input": {"command": "rm -rf src"}})
@@ -416,7 +425,7 @@ class HookSmokeTests(SafetyTestCase):
         self.assertIn('"permissionDecision":"ask"', proc.stdout)
         self.assertIn("rm-recursive", proc.stdout)
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required for hook smoke tests")
+    @unittest.skipUnless(find_bash(), "bash is required for hook smoke tests")
     def test_hook_denies_global_hard_block_with_json(self):
         proc = self.run_hook(
             {"tool_name": "Bash", "tool_input": {"command": "psql -c 'DROP TABLE users;'"}}
