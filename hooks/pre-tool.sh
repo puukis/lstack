@@ -157,18 +157,27 @@ PYEOF
     fi
 fi
 
-# BASH SAFETY GATES
-if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
-    # Check each dangerous pattern
-    if printf '%s' "${bash_cmd}" | grep -qE 'rm[[:space:]]+-rf[[:space:]]+[^-]'; then
-        printf 'Blocked: rm -rf with target detected. Refusing destructive delete.'
+# SAFETY MODES + GLOBAL BASH SAFETY GATES
+_safety_checked=0
+if [ -n "${PYTHON}" ] && [ -f "${CLAUDE_DIR}/scripts/safety.py" ]; then
+    _safety_status=0
+    _safety_result="$(printf '%s' "${input}" | "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" hook 2>/dev/null)" || _safety_status=$?
+    if [ "${_safety_status}" -eq 0 ]; then
+        _safety_checked=1
+        if [ -n "${_safety_result}" ]; then
+            printf '%s\n' "${_safety_result}"
+            exit 0
+        fi
+    fi
+fi
+
+# Fallback hard gates if Python safety helper is unavailable.
+if [ "${_safety_checked}" != "1" ] && [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
+    if printf '%s' "${bash_cmd}" | grep -qiE 'DROP[[:space:]]+(TABLE|DATABASE)'; then
+        printf 'Blocked: destructive DROP detected. Refusing destructive database operation.'
         exit 2
     fi
-    if printf '%s' "${bash_cmd}" | grep -qiE 'DROP[[:space:]]+TABLE'; then
-        printf 'Blocked: DROP TABLE detected. Refusing destructive database operation.'
-        exit 2
-    fi
-    if printf '%s' "${bash_cmd}" | grep -qE 'git[[:space:]]+push[[:space:]]+--force'; then
+    if printf '%s' "${bash_cmd}" | grep -qE 'git[[:space:]]+push[[:space:]]+--force([[:space:]]|$)'; then
         printf 'Blocked: git push --force detected. Use --force-with-lease or confirm explicitly.'
         exit 2
     fi
@@ -182,6 +191,10 @@ if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
     fi
     if printf '%s' "${bash_cmd}" | grep -qE 'mkfs'; then
         printf 'Blocked: mkfs detected. Refusing filesystem format command.'
+        exit 2
+    fi
+    if printf '%s' "${bash_cmd}" | grep -qE 'rm[[:space:]][^|;&]*-[^|;&]*r[^|;&]*f?[^|;&]*(/|~|\$HOME|/Users|/home|[A-Za-z]:[/\\]?)'; then
+        printf 'Blocked: recursive rm targets a critical path.'
         exit 2
     fi
 fi
@@ -272,6 +285,28 @@ try: print(len(json.load(sys.stdin)))
 except: print(0)
 " 2>/dev/null || echo "0")"
 
+                _learn_results="$("${PYTHON}" "${DB_PY}" learn-search \
+                    "${_sem_query:-${_mem_keywords}}" \
+                    --project "${_mem_project}" --limit 2 --json 2>/dev/null || echo '[]')"
+
+                _learn_inject_text="$(printf '%s' "${_learn_results}" | "${PYTHON}" -c "
+import sys,json
+try:
+  items=json.load(sys.stdin)
+  lines=[]
+  for it in items[:2]:
+    if int(it.get('effective_confidence', 0)) < 5:
+      continue
+    lines.append('Prior learning applied [%s/%s confidence %s/10]: %s' % (
+      it.get('type'), it.get('key'),
+      it.get('effective_confidence'), it.get('insight','')[:130]
+    ))
+  print('\\n'.join(lines))
+except Exception:
+  print('')
+" 2>/dev/null || echo '')"
+
+                _mem_inject_text=""
                 if [ "${_mem_count}" -gt 0 ]; then
                     _mem_inject_text="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
 import sys,json
@@ -285,13 +320,23 @@ try:
   print('\n'.join(lines))
 except: print('')
 " 2>/dev/null || echo '')"
+                fi
 
+                if [ -n "${_learn_inject_text}" ]; then
                     if [ -n "${_mem_inject_text}" ]; then
-                        _mem_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_mem_inject_text}" 2>/dev/null)"
-                        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":%s}}\n' "${_mem_escaped}"
+                        _mem_inject_text="${_learn_inject_text}
+${_mem_inject_text}"
+                    else
+                        _mem_inject_text="${_learn_inject_text}"
+                    fi
+                fi
 
-                        # Update state: record last inject count and file path
-                        "${PYTHON}" -c "
+                if [ -n "${_mem_inject_text}" ]; then
+                    _mem_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_mem_inject_text}" 2>/dev/null)"
+                    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":%s}}\n' "${_mem_escaped}"
+
+                    # Update state: record last inject count and file path
+                    "${PYTHON}" -c "
 import json,sys
 f,count,fpath=sys.argv[1],int(sys.argv[2]),sys.argv[3]
 try: d=json.load(open(f))
@@ -302,7 +347,6 @@ if fpath and fpath not in files: files.append(fpath)
 d['mem_injected_files']=files[-20:]
 json.dump(d,open(f,'w'))
 " "${MEM_STATE_FILE}" "${_mem_call_count}" "${_mem_file_path}" 2>/dev/null || true
-                    fi
                 fi
             fi
         fi

@@ -63,25 +63,23 @@ ${git_context}"
 fi
 
 # --- lstack persistent memory --- (db.py session-start)
-SESSION_ID="${CLAUDE_SESSION_ID:-$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")}"
+if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    SESSION_ID="${CLAUDE_SESSION_ID}"
+else
+    SESSION_ID="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
+fi
 _db_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-_db_project="$("${PYTHON}" -c "
-import sys, re
-p = sys.argv[1]
-m = re.match(r'^/([a-zA-Z])/(.*)', p)
-print(f'{m.group(1).upper()}:/{m.group(2)}' if m else p)
-" "${_db_project_raw}" 2>/dev/null || echo "${_db_project_raw}")"
+_db_project="$(to_native_path "${_db_project_raw}" 2>/dev/null || echo "${_db_project_raw}")"
 # Normalize to forward slashes to match stored format
 _db_project="${_db_project//\\//}"
 
 _db_result="$("${PYTHON}" "${DB_PY}" session-start "${SESSION_ID}" "${_db_project}" 2>/dev/null || true)"
-_db_context="$(printf '%s' "${_db_result}" | "${PYTHON}" -c "
-import sys,json
+_db_context="$(printf '%s' "${_db_result}" | "${PYTHON}" -c 'import sys,json
 try:
-  d=json.load(sys.stdin)
-  print(d.get('context',''))
-except: pass
-" 2>/dev/null || true)"
+    d=json.load(sys.stdin)
+    print(d.get("context",""))
+except Exception:
+    pass' 2>/dev/null || true)"
 
 if [ -n "${_db_context}" ]; then
     _db_block="--- persistent memory (past sessions, project + global) ---
@@ -96,6 +94,27 @@ ${_db_block}"
     fi
 fi
 # --- end lstack persistent memory ---
+
+# --- structured learnings ---
+_learn_result="$("${PYTHON}" "${DB_PY}" learn-context \
+    --project "${_db_project}" --limit 5 --cross-project 2>/dev/null || true)"
+_learn_context="$(printf '%s' "${_learn_result}" | "${PYTHON}" -c 'import sys,json
+try:
+    d=json.load(sys.stdin)
+    print(d.get("context",""))
+except Exception:
+    pass' 2>/dev/null || true)"
+
+if [ -n "${_learn_context}" ]; then
+    if [ -n "${memory_content}" ]; then
+        memory_content="${memory_content}
+
+${_learn_context}"
+    else
+        memory_content="${_learn_context}"
+    fi
+fi
+# --- end structured learnings ---
 
 # --- debrief injection ---
 # Load last debrief if it exists and is less than 7 days old

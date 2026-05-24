@@ -24,6 +24,13 @@ Commands:
   search [query]    Search persistent memory for [query]
   logs              Tail tool-calls.log with color
   status            Show hook health, memory sizes, session/compaction timestamps
+  freeze PATH       Restrict Edit/Write/MultiEdit to path(s) for this session
+  unfreeze          Clear the current session freeze boundary
+  guard PATH        Enable careful safety mode plus freeze boundary
+  safety status     Show safety mode and freeze boundary state
+  safety careful    Ask before risky Bash commands this session
+  safety strict     Deny risky Bash commands this session
+  safety off        Disable opt-in safety checks this session
   clean             Prune logs >30 days; remove loop/reads state for dead PIDs
   dashboard         Live display of parallel agent worktrees
   upgrade           Pull latest lstack from git origin
@@ -33,6 +40,7 @@ Commands:
   analytics         Show memory analytics — observations per week, top tags, scope breakdown
   mcp               Start lstack MCP server (stdio transport)
   memory embed-all  Backfill semantic embeddings for all observations
+  learn             Manage structured learnings
   sync              Sync memory to/from a private git repo (cross-device)
   help              Show this message
 EOF
@@ -413,6 +421,28 @@ cmd_status() {
     fi
 }
 
+cmd_freeze() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" freeze "$@"
+}
+
+cmd_unfreeze() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" freeze --clear
+}
+
+cmd_safety() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local subcmd="${1:-status}"
+    shift 2>/dev/null || true
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" safety "${subcmd}" "$@"
+}
+
+cmd_guard() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" guard "$@"
+}
+
 cmd_clean() {
     local log_dir="${CLAUDE_DIR}/logs"
     echo "Cleaning lstack logs..."
@@ -547,6 +577,9 @@ cmd_publish() {
         [ -f "${f}" ] && cp "${f}" "${staging}/hooks/"
     done
     for f in "${CLAUDE_DIR}/scripts/"*.sh; do
+        [ -f "${f}" ] && cp "${f}" "${staging}/scripts/"
+    done
+    for f in "${CLAUDE_DIR}/scripts/"*.py; do
         [ -f "${f}" ] && cp "${f}" "${staging}/scripts/"
     done
     [ -f "${CLAUDE_DIR}/bin/lstack" ] && cp "${CLAUDE_DIR}/bin/lstack" "${staging}/bin/lstack"
@@ -1037,6 +1070,55 @@ cmd_analytics() {
     "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" analytics
 }
 
+cmd_learn() {
+    source "${CLAUDE_DIR}/scripts/os.sh"
+    local subcmd="${1:-help}"
+    shift 2>/dev/null || true
+
+    case "${subcmd}" in
+        add)                  "${PYTHON}" "${DB_PY}" learn-add "$@" ;;
+        search)               "${PYTHON}" "${DB_PY}" learn-search "$@" ;;
+        list)                 "${PYTHON}" "${DB_PY}" learn-list "$@" ;;
+        show)                 "${PYTHON}" "${DB_PY}" learn-show "$@" ;;
+        forget)               "${PYTHON}" "${DB_PY}" learn-forget "$@" ;;
+        promote)              "${PYTHON}" "${DB_PY}" learn-promote "$@" ;;
+        demote)               "${PYTHON}" "${DB_PY}" learn-demote "$@" ;;
+        stats)                "${PYTHON}" "${DB_PY}" learn-stats "$@" ;;
+        prune)                "${PYTHON}" "${DB_PY}" learn-prune "$@" ;;
+        embed-all)            "${PYTHON}" "${DB_PY}" learn-embed-all "$@" ;;
+        export)               "${PYTHON}" "${DB_PY}" learn-export "$@" ;;
+        import)               "${PYTHON}" "${DB_PY}" learn-import "$@" ;;
+        migrate-observations) "${PYTHON}" "${DB_PY}" learn-migrate-observations "$@" ;;
+        config)               "${PYTHON}" "${DB_PY}" learn-config "$@" ;;
+        help|--help|-h|"")
+            cat <<EOF
+Usage: lstack learn <command> [options]
+
+Commands:
+  add                  Add a structured learning
+  search QUERY         Search structured learnings
+  list                 List structured learnings
+  show ID              Show one learning
+  forget               Delete by --id, --key/--type, or query
+  promote --id ID      Mark trusted after explicit user request
+  demote --id ID       Mark untrusted
+  stats                Show learning analytics
+  prune                Delete matching learnings with --dry-run or --apply
+  embed-all            Backfill semantic embeddings for learnings
+  export               Export JSONL
+  import FILE          Import JSONL with validation
+  migrate-observations Convert selected legacy observations on request
+  config show|set      Show or update learning config
+EOF
+            ;;
+        *)
+            echo "Unknown learn subcommand: ${subcmd}"
+            echo "Run: lstack learn help"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_sync() {
     source "${CLAUDE_DIR}/scripts/os.sh"
     local sync_repo_file="${CLAUDE_DIR}/memory/.sync-repo"
@@ -1120,6 +1202,10 @@ case "${cmd}" in
     search)    cmd_search "$@" ;;
     logs)      cmd_logs "$@" ;;
     status)    cmd_status "$@" ;;
+    freeze)    cmd_freeze "$@" ;;
+    unfreeze)  cmd_unfreeze "$@" ;;
+    safety)    cmd_safety "$@" ;;
+    guard)     cmd_guard "$@" ;;
     clean)     cmd_clean "$@" ;;
     dashboard) cmd_dashboard "$@" ;;
     upgrade)   cmd_upgrade "$@" ;;
@@ -1127,6 +1213,7 @@ case "${cmd}" in
     forget)    cmd_forget "$@" ;;
     edit)      cmd_edit "$@" ;;
     analytics) cmd_analytics "$@" ;;
+    learn)     cmd_learn "$@" ;;
     mcp)       cmd_mcp "$@" ;;
     sync)      cmd_sync "$@" ;;
     help|--help|-h) usage ;;

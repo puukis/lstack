@@ -110,7 +110,8 @@ else:
         2>/dev/null || echo "${_learn_project_raw}")"
     _learn_project="${_learn_project//\\//}"
 
-    local learnings=""
+    local structured_learnings=""
+    local flat_learnings=""
 
     # --- LAYER 1: LLM extraction via saved claude path ---
     local _claude_bin=""
@@ -138,8 +139,8 @@ else:
 ${transcript_excerpt}
 
 ---
-Read this transcript excerpt. Extract up to 5 observations worth saving to
-persistent memory across sessions.
+Read this transcript excerpt. Extract up to 3 durable structured learnings
+worth saving to persistent memory across sessions.
 
 Include ONLY items that match these criteria:
 - Non-obvious bugs and their confirmed root cause
@@ -151,14 +152,20 @@ Include ONLY items that match these criteria:
 - Anything you would want to know at the start of the next session to avoid
   repeating a mistake or rediscovering something already solved
 
-Output ONLY the observations, one per line, max 150 characters each, plain
-text, no bullets, no numbering, no prefixes. If nothing qualifies, output
+Output ONLY JSONL, one object per line, no markdown. Each object must have:
+key, type, insight, confidence, source, tags.
+Allowed type: pattern, pitfall, preference, architecture, tool, operational, investigation.
+Allowed source for this automatic extraction: observed or inferred only.
+Use confidence 5-8. Use observed only when the transcript confirms it;
+otherwise use inferred. Do not output user-stated. Do not mark trusted.
+Keys must be lowercase letters, numbers, hyphen, underscore, or dot.
+Insights must be concise and non-instructional. If nothing qualifies, output
 nothing."
 
-            learnings="$(printf '%s' "${learn_prompt}" | \
+            structured_learnings="$(printf '%s' "${learn_prompt}" | \
                 "${_claude_bin}" -p 2>/dev/null || true)"
 
-            if [ -n "${learnings}" ]; then
+            if [ -n "${structured_learnings}" ]; then
                 printf '[%s] STOP learn-extract LLM success\n' "$(iso_now)" \
                     >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
             else
@@ -171,14 +178,13 @@ nothing."
             "$(iso_now)" >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
     fi
 
-    # --- LAYER 2: Python fallback if LLM extraction produced nothing ---
-    # Reads JSONL transcript directly. Stores every assistant message
-    # over 60 chars. No filtering - nothing suppressed. Some noise is fine.
-    if [ -z "${learnings}" ]; then
+    # --- LAYER 2: Conservative flat fallback if LLM extraction produced nothing ---
+    # Do not create structured learnings from arbitrary assistant text.
+    if [ -z "${structured_learnings}" ]; then
         printf '[%s] STOP learn-extract running Python fallback\n' "$(iso_now)" \
             >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
 
-        learnings="$("${PYTHON}" - "${transcript_path}" <<'PYEOF' 2>/dev/null || echo ''
+        flat_learnings="$("${PYTHON}" - "${transcript_path}" <<'PYEOF' 2>/dev/null || echo ''
 import sys, json, re
 
 path = sys.argv[1]
@@ -210,12 +216,18 @@ for line in reversed(raw_lines):
     else:
         continue
     text = text.strip()
-    # Take only the first sentence
+    lowered = text.lower()
+    if not any(p in lowered for p in [
+        'root cause', 'fixed by', 'fix was', 'workaround',
+        'platform-specific', 'regression', 'requires windows',
+        'requires macos', 'requires linux'
+    ]):
+        continue
     first = re.split(r'(?<=[.!?])\s', text)[0].strip()
     first = re.sub(r'\s+', ' ', first)
     if len(first) >= 60:
         messages.append(first[:150])
-    if len(messages) >= 5:
+    if len(messages) >= 3:
         break
 
 for m in messages:
@@ -224,15 +236,83 @@ PYEOF
 )"
     fi
 
-    if [ -z "${learnings}" ]; then
+    if [ -z "${structured_learnings}" ] && [ -z "${flat_learnings}" ]; then
         printf '[%s] STOP learn-extract: nothing to store\n' "$(iso_now)" \
             >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
         return 0
     fi
 
-    # Store each learning in the DB
+    if [ -n "${structured_learnings}" ]; then
+        local _structured_tmp
+        _structured_tmp="$(mktemp /tmp/lstack-learnings-XXXXXX.jsonl)"
+        printf '%s\n' "${structured_learnings}" > "${_structured_tmp}"
+        _structured_stored="$("${PYTHON}" - "${_structured_tmp}" "${DB_PY}" "${_learn_session_id}" "${_learn_project}" <<'PYEOF' 2>/dev/null || echo 0
+import json
+import os
+import subprocess
+import sys
+
+path, db_py, session_id, project = sys.argv[1:5]
+py = sys.executable
+allowed_types = {
+    'pattern', 'pitfall', 'preference', 'architecture',
+    'tool', 'operational', 'investigation'
+}
+stored = 0
+try:
+    lines = open(path, encoding='utf-8', errors='replace').read().splitlines()
+except Exception:
+    lines = []
+
+for line in lines:
+    if stored >= 3:
+        break
+    line = line.strip()
+    if not line or not line.startswith('{'):
+        continue
+    try:
+        item = json.loads(line)
+    except Exception:
+        continue
+    source = item.get('source', 'inferred')
+    if source not in {'observed', 'inferred'}:
+        continue
+    learning_type = item.get('type', 'operational')
+    if learning_type not in allowed_types:
+        continue
+    confidence = int(item.get('confidence', 5))
+    confidence = max(1, min(8, confidence))
+    tags = item.get('tags', [])
+    if isinstance(tags, list):
+        tags = ','.join(str(t) for t in tags)
+    cmd = [
+        py, db_py, 'learn-add',
+        '--session-id', session_id,
+        '--project', project,
+        '--type', learning_type,
+        '--key', str(item.get('key', 'session-learning')),
+        '--insight', str(item.get('insight', '')),
+        '--confidence', str(confidence),
+        '--source', source,
+        '--tag', tags,
+    ]
+    for file_path in item.get('files', []) or []:
+        cmd.extend(['--file', str(file_path)])
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode == 0:
+        stored += 1
+print(stored)
+PYEOF
+)"
+        rm -f "${_structured_tmp}" 2>/dev/null || true
+        printf '[%s] STOP structured-learning-extracted\n' "$(iso_now)" \
+            >> "${LOG_DIR}/sessions.log" 2>/dev/null || true
+        return 0
+    fi
+
+    # Store conservative fallback lines as legacy observations only.
     local _stored=0
-    printf '%s' "${learnings}" | while IFS= read -r _learn_line; do
+    printf '%s' "${flat_learnings}" | while IFS= read -r _learn_line; do
         [ -z "${_learn_line}" ] && continue
         local _learn_tags
         _learn_tags="$("${PYTHON}" -c "

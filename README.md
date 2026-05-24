@@ -13,7 +13,7 @@ A personal Claude Code environment that actually enforces things.
 
 ## What it is
 
-lstack is a portable ~/.claude environment for Claude Code. It adds persistent SQLite memory across sessions, loop detection, bash safety gates, auto-formatting, 15 on-demand skills, and a custom statusline — all working through Claude Code's native hook system.
+lstack is a portable ~/.claude environment for Claude Code. It adds persistent SQLite memory across sessions, loop detection, bash safety gates, auto-formatting, on-demand skills, and a custom statusline — all working through Claude Code's native hook system.
 
 No runtime. No daemon. No dependencies beyond bash, python3, and git.
 
@@ -43,6 +43,7 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | Feature                          | Vanilla CC | gstack | Superpowers | lstack |
 |----------------------------------|------------|--------|-------------|--------|
 | Persistent memory (SQLite)       | —          | —      | —           | yes    |
+| Structured typed learnings       | —          | —      | —           | yes    |
 | Mid-session memory injection     | —          | —      | —           | yes    |
 | Loop detection                   | —          | —      | —           | yes    |
 | Token budget warnings            | —          | —      | —           | yes    |
@@ -80,13 +81,18 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | /debug         | bug or error described                       | reproduce, isolate, hypothesize, verify, state root cause      |
 | /ship          | explicitly invoked                           | 5-point checklist before any release                           |
 | /security      | auth, tokens, or deploy mentioned            | scans secrets, injection, bad deps                             |
+| /freeze        | "only edit X", "freeze edits"                | restricts Edit/Write/MultiEdit to session paths                |
+| /unfreeze      | "clear freeze", "remove edit lock"           | clears the current session edit boundary                       |
+| /careful       | "be careful", prod/shared environment        | asks or denies before risky Bash commands                      |
+| /guard         | "lock it down", "maximum safety"             | combines careful mode with an edit freeze                      |
 | /architect     | new systems or large features                | ADRs and ARCHITECTURE.md before code                           |
 | /parallel      | explicitly invoked                           | up to 3 sub-agents in isolated git worktrees                   |
-| /remember      | explicitly invoked                           | stores a finding in persistent memory                          |
-| /forget        | explicitly invoked                           | deletes matching observations from memory                      |
+| /learn         | explicitly invoked                           | stores typed, trust-aware structured learnings                 |
+| /remember      | explicitly invoked                           | stores user-confirmed structured memory                        |
+| /forget        | explicitly invoked                           | deletes or demotes structured learnings and observations       |
 | /debrief       | explicitly invoked                           | end-of-session reflection written to disk in under 300 words   |
-| /recall        | "what do you know", "do you remember"        | search, browse, and manage persistent memory observations      |
-| /analytics     | explicitly invoked                           | memory analytics: observations per week, top tags, scope       |
+| /recall        | "what do you know", "do you remember"        | search structured learnings and legacy observations            |
+| /analytics     | explicitly invoked                           | observation and structured learning analytics                  |
 | /changelog     | explicitly invoked                           | generates CHANGELOG.md entry from git log since last tag       |
 | /orchestrate   | Tier 2/3 tasks detected                      | Evaluates complexity, offers sub-agent dispatch with AskUserQuestion |
 
@@ -97,11 +103,76 @@ Windows: runs in Git Bash. All hooks use native Windows Python. No WSL required.
 | Hook                      | Event                  | What it enforces                                           |
 |---------------------------|------------------------|------------------------------------------------------------|
 | hooks/session-start.sh    | Session opens          | Injects memory and git context                             |
-| hooks/pre-tool.sh         | Before any tool call   | Loop detection, safety gates, memory lookup, re-read warnings |
+| hooks/pre-tool.sh         | Before any tool call   | Loop detection, safety gates, freeze/careful checks, memory lookup, re-read warnings |
 | hooks/post-tool.sh        | After Write/Edit       | Auto-formats files, memory signal detector                 |
 | hooks/pre-compact.sh      | Before compaction      | Saves handover summary via fresh subprocess                |
 | hooks/stop.sh             | Session ends           | Runs project tests, stores session learnings in SQLite     |
 | scripts/token-budget.sh   | Each prompt            | Warns at 60% context, alerts at 80%                        |
+
+---
+
+## Safety Modes
+
+lstack has three per-session safety workflows layered on top of the existing global hard Bash gates.
+
+### freeze
+
+`freeze` restricts Claude Code edit tools to approved paths for the current session:
+
+    lstack freeze src/auth
+    lstack freeze --allow src/auth --allow tests/auth
+    lstack freeze --show
+    lstack unfreeze
+
+When active, `hooks/pre-tool.sh` denies Edit, Write, and MultiEdit outside the allowed boundaries. Paths are normalized before comparison, so `src` does not match `src-old`, and repo-relative, absolute, Windows drive, and Git Bash `/c/...` paths are handled. Read, Glob, Grep, and Bash are not blocked by freeze by default.
+
+Freeze state is stored per session under `~/.claude/logs/freeze-<session>.json`. The session id uses `CLAUDE_SESSION_ID` when available, otherwise a PPID-style fallback.
+
+### careful
+
+`careful` is opt-in Bash risk checking:
+
+    lstack safety careful
+    lstack safety strict
+    lstack safety off
+    lstack safety status
+
+Careful mode returns a hook `ask` decision for risky Bash commands when Claude Code supports it. Strict mode returns `deny`. Existing global hard blocks still deny the most severe operations in every mode.
+
+Detected risks include recursive deletes, destructive SQL, force pushes, hard resets, workspace-wide restore/checkout, git clean, kubectl delete, obvious production kubectl apply, destructive docker commands, recursive chmod/chown, device writes, process-kill patterns, and dependency-uninstall commands.
+
+Smart safe exceptions allow repo-local generated-output cleanup such as:
+
+    rm -rf node_modules .next dist build coverage .turbo .cache __pycache__ \
+      .pytest_cache .ruff_cache target out tmp temp
+
+The exception only applies when the target is confidently inside the current project or working directory. It never applies to `/`, `~`, `$HOME`, `/Users`, `/home`, `C:/Users`, drive roots, or uncertain variable/glob targets.
+
+Override for opt-in careful/strict checks:
+
+    LSTACK_CONFIRM_DESTRUCTIVE=1 <command>
+    lstack safety allow-once <command-hash>
+
+Global hard blocks remain hard blocks.
+
+### guard
+
+`guard` is the maximum safety workflow: careful mode plus freeze.
+
+    lstack guard src/auth
+    lstack guard --allow src/auth --allow tests/auth
+    lstack guard --strict src/auth
+    lstack guard --clear
+
+By default guard enables `lstack safety careful` and freezes edits to the allowed paths. `--strict` uses strict Bash risk denial.
+
+Status shows both layers:
+
+    lstack safety status
+
+The status output includes safety mode, freeze active state, allowed paths, session id, state file paths, creation times, and recent blocked/warned event count. Events are appended to `~/.claude/logs/safety-events.log` with command previews clamped and common secrets redacted.
+
+Limitations: freeze and guard are accidental-damage guards, not a security sandbox. Bash can still mutate files unless caught by careful/strict or the global hard gates.
 
 ---
 
@@ -132,15 +203,51 @@ Tier 1 tasks (under 20 min, 1-2 files) never use sub-agents.
 
 ## Memory
 
-lstack v2 uses semantic vector search (sqlite-vec + all-MiniLM-L6-v2) when available, falling back to FTS5 keyword search. Embeddings are stored in the same SQLite database — no external service required. The model (~80MB) downloads once on first use and runs fully offline.
+lstack stores memory locally in SQLite at:
 
-DB location: `~/.claude/memory/lstack.db`
+    ~/.claude/memory/lstack.db
+
+There are two memory layers:
+
+- **Legacy observations**: flat session notes stored in `observations`. Existing commands keep working: `lstack search`, `lstack memory stats`, `lstack memory prune`, and `lstack memory embed-all`.
+- **Structured learnings**: typed, trust-aware records stored in `learnings`. These are durable facts, preferences, patterns, pitfalls, tool notes, and investigations with confidence, source, scope, tags, files, branch, commit, timestamps, optional embeddings, and append-only history.
+
+Semantic vector search uses sqlite-vec + all-MiniLM-L6-v2 when available, falling back to FTS5 keyword search, then LIKE search. Embeddings are stored in the same SQLite database. There is no hosted service and no daemon.
 
 Automatic injection points:
 
-- **Session start**: recent observations for the current project are injected before the first message. Last session debrief (if under 7 days old) is also injected.
-- **Mid-session**: when Claude reads a file or runs a command, relevant past context is retrieved via semantic search and injected before the tool executes. Rate-limited to one injection per 15 tool calls.
-- **Session end**: Stop hook extracts up to 3 learnings and stores them as observations automatically. A desktop notification fires on session end.
+- **Session start**: injects a compact structured-learning block, then recent legacy observations. At most 5 structured learnings are injected.
+- **Mid-session**: when Claude reads a file or runs a command, relevant structured learnings and observations can be retrieved. This is rate-limited.
+- **Session end**: Stop hook extracts up to 3 durable structured learnings when the model returns validated JSONL. Conservative fallback may store legacy observations only.
+
+Structured learning types:
+
+    pattern, pitfall, preference, architecture, tool, operational, investigation
+
+Sources:
+
+    observed, user-stated, inferred, cross-model
+
+Confidence and trust:
+
+- Confidence is an integer from 1 to 10.
+- `user-stated` defaults to confidence 10 and trusted true.
+- `observed` defaults to confidence 8 and trusted false.
+- `cross-model` defaults to confidence 8 and trusted false unless explicitly promoted.
+- `inferred` defaults to confidence 5 and trusted false.
+- Observed and inferred learnings decay by 1 point every 30 days.
+- Untrusted cross-model learnings decay by 1 point every 60 days.
+- Trusted user-stated learnings do not decay by default.
+- Search can show original and effective confidence.
+
+Safety model:
+
+- Cross-project search requires `--cross-project`.
+- Cross-project results are automatically trusted-only.
+- Cross-project injection is disabled by default with `cross_project_learnings: false`.
+- User-stated learnings are the only learnings allowed to propagate cross-project by default.
+- Tool output, files, webpages, and PR text are never treated as user preferences.
+- Unsafe instruction-like insights and unsafe keys are rejected.
 
 Manual controls:
 
@@ -150,7 +257,33 @@ Manual controls:
     lstack memory embed-all   # backfill semantic embeddings
     lstack analytics          # observations per week, top tags
 
-From inside Claude Code, use `/remember` to store a finding mid-session, `/recall` to search memory, or `/forget` to delete matching observations.
+Structured learning examples:
+
+    lstack learn add --type pitfall --key auth-token-expiry \
+      --insight "JWT refresh fails when clock skew exceeds 30s" \
+      --confidence 8 --source observed --file src/auth.ts
+
+    lstack learn add --type preference --key no-comments-default \
+      --insight "User prefers code without comments unless WHY is non-obvious" \
+      --source user-stated --global
+
+    lstack learn search "clock skew" --type pitfall
+    lstack learn search "portable shell" --cross-project --trusted-only
+    lstack learn list --type preference
+    lstack learn show 123
+    lstack learn promote --id 123
+    lstack learn demote --id 123
+    lstack learn forget --id 123
+    lstack learn stats
+    lstack learn prune --older-than-days 120 --confidence-below 3 --dry-run
+    lstack learn embed-all
+    lstack learn export > learnings.jsonl
+    lstack learn import learnings.jsonl
+    lstack learn migrate-observations --dry-run
+
+From inside Claude Code, use `/learn` or `/remember` to store a structured learning, `/recall` to search learnings and observations, `/forget` to delete or demote memory, and `/analytics` to inspect memory health.
+
+Privacy: memory stays local in `~/.claude/memory/lstack.db` unless you explicitly export or sync it.
 
 ---
 
@@ -183,6 +316,13 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 | lstack memory prune   | Delete old observations                          |
 | lstack logs           | Tail tool-calls.log with color                   |
 | lstack status         | Hook health, memory sizes, session timestamps    |
+| lstack freeze PATH    | Restrict Edit/Write/MultiEdit to session paths   |
+| lstack unfreeze       | Clear the current session freeze boundary        |
+| lstack safety status  | Show safety mode and freeze boundary             |
+| lstack safety careful | Ask before risky Bash commands this session      |
+| lstack safety strict  | Deny risky Bash commands this session            |
+| lstack safety off     | Disable opt-in safety checks this session        |
+| lstack guard PATH     | Enable careful mode plus freeze boundary         |
 | lstack dashboard      | Live display of parallel agent worktrees         |
 | lstack clean          | Prune logs and dead loop state files             |
 | lstack upgrade        | Pull latest lstack from git                      |
@@ -190,6 +330,13 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 | lstack analytics      | Memory analytics: observations per week, top tags|
 | lstack mcp            | Start lstack MCP server (stdio transport)        |
 | lstack memory embed-all | Backfill semantic embeddings for all observations|
+| lstack learn add      | Add a typed structured learning                  |
+| lstack learn search   | Search structured learnings                      |
+| lstack learn list     | List structured learnings                        |
+| lstack learn promote  | Mark a learning trusted after explicit request   |
+| lstack learn demote   | Mark a learning untrusted                        |
+| lstack learn prune    | Prune old, low-confidence, or superseded learnings|
+| lstack learn export/import | Backup or restore structured learnings      |
 
 ---
 
@@ -222,7 +369,7 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
     │   ├── token-budget.sh        Context usage warnings
     │   ├── gen-settings.sh        OS-aware settings.json generator
     │   └── dashboard.sh           Parallel agent monitor
-    ├── skills/                    15 skill subdirectories (SKILL.md each)
+    ├── skills/                    skill subdirectories (SKILL.md each)
     ├── memory/
     │   ├── MEMORY.md              Global memory index
     │   └── lstack.db              SQLite persistent memory (gitignored)
