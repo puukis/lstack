@@ -213,7 +213,8 @@ class StopHookSmokeTests(unittest.TestCase):
         self.assertIn("no explicit learning markers found", learn)
 
     @unittest.skipUnless(find_bash(), "bash is required")
-    def test_valid_marker_stores_exactly_one_observation(self):
+    def test_valid_marker_stores_into_learnings_not_observations(self):
+        """Explicit [LSTACK_LEARNING] markers must go to the learnings table."""
         message = (
             "Done.\n\n[LSTACK_LEARNING]\n"
             "type: operational\n"
@@ -236,14 +237,118 @@ class StopHookSmokeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(self.db_path)
         try:
-            rows = con.execute("SELECT content, tags FROM observations").fetchall()
+            # Must be in learnings table
+            rows = con.execute(
+                "SELECT key, type, insight, source FROM learnings"
+            ).fetchall()
+            # Must NOT be stored only in observations
+            obs_rows = con.execute(
+                "SELECT content FROM observations WHERE content LIKE '%windows-git-bash-stop-hook-recursion%'"
+            ).fetchall()
         finally:
             con.close()
-        self.assertEqual(len(rows), 1)
-        self.assertIn("[operational/windows-git-bash-stop-hook-recursion]", rows[0][0])
-        self.assertIn("lstack-learning", rows[0][1])
+        self.assertEqual(len(rows), 1, f"expected 1 learning, got {rows}")
+        self.assertEqual(rows[0][0], "windows-git-bash-stop-hook-recursion")
+        self.assertEqual(rows[0][1], "operational")
+        self.assertIn("nested Claude sessions", rows[0][2])
+        self.assertEqual(rows[0][3], "observed")
+        self.assertEqual(obs_rows, [], "marker must not be stored in observations table")
         sessions = (self.logs / "sessions.log").read_text(encoding="utf-8")
-        self.assertIn("learning-extracted stored=1", sessions)
+        self.assertIn("learning-extracted structured=1", sessions)
+
+    @unittest.skipUnless(find_bash(), "bash is required")
+    def test_marker_not_stored_in_observations(self):
+        """Regression: explicit markers must never land in the observations table."""
+        message = (
+            "[LSTACK_LEARNING]\n"
+            "type: operational\n"
+            "key: regression-obs-check\n"
+            "insight: Regression guard ensuring markers go to learnings only.\n"
+            "confidence: 7\n"
+            "source: observed\n"
+            "[/LSTACK_LEARNING]"
+        )
+        proc = self.run_stop({"session_id": "reg-obs", "cwd": self.tmp.name, "last_assistant_message": message})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        con = sqlite3.connect(self.db_path)
+        try:
+            try:
+                obs_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+            except sqlite3.OperationalError:
+                obs_count = 0
+            learn_count = con.execute("SELECT COUNT(*) FROM learnings WHERE key='regression-obs-check'").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(obs_count, 0, "observations table must remain empty")
+        self.assertEqual(learn_count, 1, "learning must be in learnings table")
+
+    @unittest.skipUnless(find_bash(), "bash is required")
+    def test_marker_found_by_learn_search(self):
+        """Stored marker must be retrievable by lstack learn search."""
+        key = "searchable-stop-hook-marker"
+        message = (
+            f"[LSTACK_LEARNING]\n"
+            f"type: operational\n"
+            f"key: {key}\n"
+            f"insight: Unique searchable phrase for marker search test.\n"
+            f"confidence: 8\n"
+            f"source: observed\n"
+            f"[/LSTACK_LEARNING]"
+        )
+        proc = self.run_stop({"session_id": "search-test", "cwd": self.tmp.name, "last_assistant_message": message})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        # Call Python directly (not via bash) so native Windows path is used for LSTACK_DB_PATH.
+        # Run from self.tmp.name so get_project() resolves to the same project as the stored marker.
+        env = os.environ.copy()
+        env["LSTACK_DB_PATH"] = str(self.db_path)
+        env["LSTACK_SKIP_EMBEDDINGS"] = "1"
+        search_proc = subprocess.run(
+            [sys.executable, str(DB_PY), "learn-search", key],
+            env=env,
+            cwd=self.tmp.name,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn(key, search_proc.stdout, f"learn-search did not find the marker.\nstdout={search_proc.stdout}\nstderr={search_proc.stderr}")
+
+    @unittest.skipUnless(find_bash(), "bash is required")
+    def test_marker_increases_learn_stats(self):
+        """Storing a marker must increase the learnings count in learn-stats."""
+        # Call Python directly (not via bash) so native Windows path is used for LSTACK_DB_PATH.
+        env = os.environ.copy()
+        env["LSTACK_DB_PATH"] = str(self.db_path)
+        env["LSTACK_SKIP_EMBEDDINGS"] = "1"
+
+        def get_count():
+            proc = subprocess.run(
+                [sys.executable, str(DB_PY), "learn-stats"],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            for line in proc.stdout.splitlines():
+                if "Total" in line:
+                    parts = line.split()
+                    for p in parts:
+                        if p.isdigit():
+                            return int(p)
+            return 0
+
+        before = get_count()
+        message = (
+            "[LSTACK_LEARNING]\n"
+            "type: operational\n"
+            "key: stats-increase-check\n"
+            "insight: Stats increase test for stop hook learning storage.\n"
+            "confidence: 8\n"
+            "source: observed\n"
+            "[/LSTACK_LEARNING]"
+        )
+        proc = self.run_stop({"session_id": "stats-test", "cwd": self.tmp.name, "last_assistant_message": message})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        after = get_count()
+        self.assertGreater(after, before, f"learn-stats count did not increase: before={before} after={after}")
 
     @unittest.skipUnless(find_bash(), "bash is required")
     def test_invalid_marker_stores_nothing(self):

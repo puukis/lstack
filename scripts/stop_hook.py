@@ -330,19 +330,22 @@ def extract_markers(text: str, max_markers: int) -> tuple[list[dict], int, int]:
 
 
 def store_marker(marker: dict, session_id: str, project: str, no_embed: bool) -> bool:
-    content = f"[{marker['type']}/{marker['key']}] {marker['insight']}"
-    tags = ",".join(["lstack-learning", marker["type"], marker["source"], marker["key"]])
     cmd = [
         sys.executable,
         str(db_py()),
-        "observe",
-        session_id,
-        project,
-        content,
-        tags,
+        "learn-add",
+        "--type", marker["type"],
+        "--key", marker["key"],
+        "--insight", marker["insight"],
+        "--source", marker["source"],
+        "--confidence", str(marker["confidence"]),
+        "--session-id", session_id,
+        "--project", native_path_for_subprocess(project),
+        "--tag", "lstack-learning",
+        "--tag", marker["type"],
+        "--tag", marker["source"],
+        "--tag", marker["key"],
     ]
-    if no_embed:
-        cmd.append("--no-embed")
     env = os.environ.copy()
     if no_embed:
         env["LSTACK_NO_EMBED"] = "1"
@@ -412,7 +415,7 @@ def run_learning_extraction(parsed: dict, git_root: str, state: dict, config: di
 
     attempted = len(markers)
     if stored > 0:
-        sessions_log(f"STOP learning-extracted stored={stored}")
+        sessions_log(f"STOP learning-extracted structured={stored} observations=0")
     else:
         sessions_log("STOP no learnings stored reason=no-valid-marker-stored")
     learn_log(
