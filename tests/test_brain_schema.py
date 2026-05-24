@@ -12,15 +12,17 @@ from brain.doctor import run_doctor
 from brain.schema import (
     PHASE_1A_TABLES,
     PHASE_1B_TABLES,
+    PHASE_1C_TABLES,
     existing_tables,
     init_schema,
     missing_phase_1a_tables,
     missing_phase_1b_tables,
+    missing_phase_1c_tables,
 )
 
 
 class TestBrainSchema(unittest.TestCase):
-    def test_schema_initialization_creates_phase_1a_and_1b_tables_only(self):
+    def test_schema_initialization_creates_expected_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "lstack.db"
             con = connect(db_path)
@@ -28,8 +30,9 @@ class TestBrainSchema(unittest.TestCase):
             con.close()
             self.assertTrue(PHASE_1A_TABLES.issubset(tables))
             self.assertTrue(PHASE_1B_TABLES.issubset(tables))
-            self.assertNotIn("brain_contracts", tables)
-            self.assertNotIn("brain_contract_events", tables)
+            self.assertTrue(PHASE_1C_TABLES.issubset(tables))
+            self.assertIn("brain_contracts", tables)
+            self.assertIn("brain_contract_events", tables)
             self.assertNotIn("brain_receipts", tables)
             self.assertNotIn("brain_blackbox_events", tables)
             self.assertNotIn("brain_handoffs", tables)
@@ -144,6 +147,53 @@ class TestBrainSchema(unittest.TestCase):
             con.close()
             self.assertIn("scope", decision_cols)
             self.assertIn("scope", candidate_cols)
+
+    def test_schema_initialization_is_idempotent_phase1c(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "lstack.db"
+            con = connect(db_path)
+            init_schema(con)
+            self.assertEqual(missing_phase_1c_tables(con), [])
+            tables = existing_tables(con)
+            con.close()
+            self.assertIn("brain_contracts", tables)
+            self.assertIn("brain_contract_events", tables)
+
+    def test_phase1c_tables_added_to_existing_phase1b_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "lstack.db"
+            con = sqlite3.connect(str(db_path))
+            con.row_factory = sqlite3.Row
+            con.execute(
+                "CREATE TABLE brain_projects ("
+                "id INTEGER PRIMARY KEY, root_path_hash TEXT NOT NULL, "
+                "root_path_display TEXT, repo_id TEXT, git_remote_hash TEXT, "
+                "git_branch TEXT, name TEXT, platform TEXT, shell_mode TEXT, "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(root_path_hash))"
+            )
+            con.execute(
+                "INSERT INTO brain_projects "
+                "(root_path_hash, root_path_display, name, platform, shell_mode, created_at, updated_at) "
+                "VALUES ('h2', '/tmp/r2', 'r2', 'linux', 'bash', 'now', 'now')"
+            )
+            con.commit()
+            init_schema(con)
+            tables = existing_tables(con)
+            row = con.execute("SELECT name FROM brain_projects WHERE root_path_hash = 'h2'").fetchone()
+            con.close()
+            self.assertEqual(row[0], "r2")
+            self.assertIn("brain_contracts", tables)
+            self.assertIn("brain_contract_events", tables)
+
+    def test_doctor_reports_phase1c_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "lstack.db"
+            con = connect(db_path)
+            con.close()
+            result = run_doctor(db_path)
+            checks = {c["id"]: c for c in result["checks"]}
+            self.assertIn("schema.phase1c", checks)
+            self.assertEqual(checks["schema.phase1c"]["status"], "pass")
 
     def test_doctor_reports_corrupt_db(self):
         with tempfile.TemporaryDirectory() as tmp:

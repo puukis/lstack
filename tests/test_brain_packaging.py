@@ -17,6 +17,9 @@ class TestBrainPackaging(unittest.TestCase):
         self.assertIn('docs/lbrain.md', content)
         self.assertTrue((ROOT / "lbrain" / "brain" / "decisions.py").exists())
         self.assertTrue((ROOT / "lbrain" / "brain" / "capture.py").exists())
+        self.assertTrue((ROOT / "lbrain" / "brain" / "contracts.py").exists())
+        self.assertTrue((ROOT / "lbrain" / "brain" / "autolearn.py").exists())
+        self.assertTrue((ROOT / "scripts" / "lbrain-capture-hook.py").exists())
 
     def test_install_verifies_lbrain(self):
         content = (ROOT / "install.sh").read_text(encoding="utf-8")

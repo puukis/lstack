@@ -56,7 +56,9 @@ class TestBrainDoctorPhase1B(unittest.TestCase):
             self.assertIn("decisions.active_count", checks)
             self.assertIn("capture.pending_candidates", checks)
             self.assertIn("decisions.check", checks)
-            self.assertIn("hooks.capture", checks)
+            self.assertIn("autolearn.enabled", checks)
+            self.assertIn("autolearn.hook_wrapper", checks)
+            self.assertNotIn("hooks.capture", checks)
             self.assertIn("Decision violations: 1", checks["decisions.check"]["message"])
 
     def test_doctor_reports_missing_phase1b_tables_without_mutating(self):

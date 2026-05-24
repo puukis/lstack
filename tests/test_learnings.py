@@ -377,5 +377,194 @@ class LearningTests(unittest.TestCase):
         self.assertEqual(count, 1)
 
 
+class LearnSearchCrossProjectTests(unittest.TestCase):
+    """Regression tests for --cross-project search semantics."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = load_db(self.tmp.name)
+        self.con = self.db.connect()
+        self.db.init_db(self.con)
+        self.project_a = "/repo/project-a"
+        self.project_b = "/repo/project-b"
+
+    def tearDown(self):
+        self.con.close()
+        self.tmp.cleanup()
+
+    def _add(self, **kwargs):
+        base = {
+            "session_id": "s1",
+            "project": self.project_a,
+            "key": "test-key",
+            "learning_type": "operational",
+            "insight": "test insight about omega widget",
+            "source": "observed",
+            "embed_on_write": False,
+        }
+        base.update(kwargs)
+        return self.db.insert_learning(self.con, **base)
+
+    def _search_cross(self, query, inferred_project, trusted_only=False):
+        """Call cmd_learn_search with cross_project=True, mocking get_project."""
+        original = self.db.get_project
+        self.db.get_project = lambda cwd=None: inferred_project
+        try:
+            args = SimpleNamespace(
+                query=[query],
+                project=None,
+                global_scope=False,
+                cross_project=True,
+                trusted_only=trusted_only,
+                type=None,
+                limit=10,
+                json=True,
+                no_decay=True,
+                include_superseded=False,
+            )
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.db.cmd_learn_search(args)
+            return json.loads(out.getvalue())
+        finally:
+            self.db.get_project = original
+
+    # Test 1: --cross-project without --project infers cwd project
+    def test_cross_project_infers_cwd_project(self):
+        row_id = self._add(
+            project=self.project_a,
+            key="cwd-infer",
+            insight="cwd inferred omega signal test",
+        )
+        items = self._search_cross("omega signal", self.project_a)
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 2: explicit --project with --cross-project still works
+    def test_cross_project_explicit_project_unchanged(self):
+        row_id = self._add(
+            project=self.project_a,
+            key="explicit-proj",
+            insight="explicit project omega zeta result",
+        )
+        items = self.db.search_learnings(
+            self.con, "omega zeta", project=self.project_a,
+            cross_project=False, limit=10,
+        )
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 3: untrusted project-A learning does not leak into project-B cross search
+    def test_cross_project_no_privacy_leak_untrusted(self):
+        self._add(
+            project=self.project_a,
+            key="private-untrusted",
+            insight="private leak omega delta data",
+            trusted=False,
+        )
+        items = self._search_cross("omega delta", self.project_b)
+        for item in items:
+            self.assertNotEqual(
+                item["project"], self.project_a,
+                "Untrusted project-A learning leaked into project-B cross search",
+            )
+
+    # Test 4: trusted global learning is found via --cross-project
+    def test_trusted_global_found_cross_project(self):
+        row_id = self._add(
+            project="global",
+            key="global-trusted",
+            insight="global trusted omega gamma shared",
+            source="user-stated",
+            trusted=True,
+            trusted_requested=True,
+        )
+        items = self._search_cross("omega gamma", self.project_a)
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 5a: untrusted learning found with explicit --project
+    def test_untrusted_found_with_explicit_project(self):
+        row_id = self._add(
+            project=self.project_a,
+            key="untrusted-explicit",
+            insight="untrusted omega epsilon explicit find",
+            trusted=False,
+        )
+        items = self.db.search_learnings(
+            self.con, "omega epsilon", project=self.project_a,
+            trusted_only=False, limit=10,
+        )
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 5b: untrusted project-A learning does not appear in project-B cross search
+    def test_untrusted_no_cross_project_leak(self):
+        self._add(
+            project=self.project_a,
+            key="no-leak",
+            insight="no leak omega theta cross test",
+            trusted=False,
+        )
+        items = self._search_cross("omega theta", self.project_b)
+        for item in items:
+            self.assertNotEqual(item.get("project"), self.project_a)
+
+    # Test 6: stop-hook path -- project search finds it; cross-project finds it after promote
+    def test_stop_hook_learning_project_and_promoted_cross_project(self):
+        row_id = self._add(
+            project=self.project_a,
+            key="stop-hook-sim",
+            insight="stop hook simulated omega iota marker",
+            source="observed",
+            trusted=False,
+        )
+        # Project search finds untrusted item
+        proj_items = self.db.search_learnings(
+            self.con, "omega iota", project=self.project_a, limit=10
+        )
+        self.assertIn(row_id, [i["id"] for i in proj_items])
+
+        # After promotion (trusted=1), cross-project from same project finds it
+        self.con.execute("UPDATE learnings SET trusted = 1 WHERE id = ?", (row_id,))
+        self.con.commit()
+        items = self._search_cross("omega iota", self.project_a)
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 7: Windows Git Bash path normalization
+    def test_windows_gitbash_path_normalization(self):
+        gitbash = "/c/Users/Alice/repo"
+        windows = "C:/Users/Alice/repo"
+        self.assertEqual(
+            self.db.normalize_project(gitbash),
+            self.db.normalize_project(windows),
+        )
+        row_id = self._add(
+            project=self.db.normalize_project(gitbash),
+            key="win-path-norm",
+            insight="windows path normalization omega kappa test",
+        )
+        items = self.db.search_learnings(
+            self.con, "omega kappa",
+            project=self.db.normalize_project(windows),
+            limit=10,
+        )
+        self.assertIn(row_id, [i["id"] for i in items])
+
+    # Test 8: no double C:/c/Users/... path from Windows normalization
+    def test_windows_no_double_drive_prefix(self):
+        path = normalize_project("/c/Users/Alice/repo")
+        self.assertFalse(
+            path.lower().startswith("c:/c/"),
+            f"Double drive prefix detected: {path}",
+        )
+
+
+def normalize_project(path):
+    """Thin wrapper so test module can call it directly."""
+    import re
+    if not path:
+        return path
+    m = re.match(r"^/([a-zA-Z])/(.*)", path)
+    if m:
+        return f"{m.group(1).upper()}:/{m.group(2)}"
+    return path.replace("\\", "/")
+
+
 if __name__ == "__main__":
     unittest.main()
