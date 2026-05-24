@@ -16,8 +16,9 @@ DB_PATH = Path(os.environ.get(
 ))
 CONFIG_PATH = Path(os.environ.get(
     "LSTACK_CONFIG_PATH",
-    str(DB_PATH.parent / "config.json")
+    str(DB_PATH.parent / "lstack-config.json")
 ))
+LEGACY_CONFIG_PATH = DB_PATH.parent / "config.json"
 
 LEARNING_TYPES = {
     "pattern",
@@ -45,8 +46,8 @@ LEARNING_DEFAULT_CONFIDENCE = {
 
 LEARNING_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
 PROMPT_INJECTION_RE = re.compile(
-    r"(ignore\s+previous\s+instructions|you\s+are\s+now|"
-    r"always\s+output\s+no\s+findings|skip\s+security\s+checks|"
+    r"(ignore\s+previous\s+instructions|ignore\s+all\s+previous|you\s+are\s+now|"
+    r"always\s+output\s+no\s+findings|skip\s+security|skip\s+all\s+checks|"
     r"do\s+not\s+report|approve\s+all|"
     r"(^|\n)\s*(system|assistant|user|override)\s*:)",
     re.IGNORECASE,
@@ -55,6 +56,10 @@ PROMPT_INJECTION_RE = re.compile(
 CONFIG_DEFAULTS = {
     "cross_project_learnings": False,
     "learning_auto_extract": True,
+    "learning_extract_llm": False,
+    "learning_extract_markers": True,
+    "learning_max_markers": 5,
+    "learning_stop_no_embed": True,
     "learning_decay_enabled": True,
     "learning_injection_limit": 5,
     "learning_min_effective_confidence": 3,
@@ -186,14 +191,15 @@ def parse_iso(value):
 
 def load_config():
     cfg = dict(CONFIG_DEFAULTS)
-    try:
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                cfg.update({k: raw[k] for k in CONFIG_DEFAULTS if k in raw})
-    except Exception:
-        pass
+    for path in (LEGACY_CONFIG_PATH, CONFIG_PATH):
+        try:
+            if path.exists():
+                with open(path, encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    cfg.update({k: raw[k] for k in CONFIG_DEFAULTS if k in raw})
+        except Exception:
+            pass
     return cfg
 
 
@@ -663,7 +669,7 @@ LEARNING_SELECT = f"SELECT {LEARNING_COLUMNS} FROM learnings"
 
 
 def maybe_embed_learning(con, learning_id, text):
-    if os.environ.get("LSTACK_SKIP_EMBEDDINGS") == "1":
+    if embeddings_disabled():
         return False
     if not has_learnings_vec(con) or not try_load_sqlite_vec(con):
         return False
@@ -757,6 +763,13 @@ def insert_learning(
             f"{fields['key']} {fields['type']} {fields['insight']} {fields['tags']}"
         )
     return new_id
+
+
+def embeddings_disabled():
+    return (
+        os.environ.get("LSTACK_SKIP_EMBEDDINGS") == "1"
+        or os.environ.get("LSTACK_NO_EMBED") == "1"
+    )
 
 
 def learning_scope_sql(project=None, global_only=False, cross_project=False,
@@ -1048,20 +1061,20 @@ def cmd_session_end(args):
     con.commit()
     row_id = cur.lastrowid
 
-    # Store embedding if sqlite-vec available
-    try:
-        import sqlite_vec
-        vec = embed(content)
-        con.enable_load_extension(True)
-        sqlite_vec.load(con)
-        con.enable_load_extension(False)
-        con.execute(
-            "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
-            (row_id, vec)
-        )
-        con.commit()
-    except Exception:
-        pass
+    if not embeddings_disabled():
+        try:
+            import sqlite_vec
+            vec = embed(content)
+            con.enable_load_extension(True)
+            sqlite_vec.load(con)
+            con.enable_load_extension(False)
+            con.execute(
+                "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
+                (row_id, vec)
+            )
+            con.commit()
+        except Exception:
+            pass
 
     con.close()
     print("ok")
@@ -1087,20 +1100,20 @@ def cmd_observe(args):
     con.commit()
     row_id = cur.lastrowid
 
-    # Store embedding if sqlite-vec available
-    try:
-        import sqlite_vec
-        vec = embed(content)
-        con.enable_load_extension(True)
-        sqlite_vec.load(con)
-        con.enable_load_extension(False)
-        con.execute(
-            "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
-            (row_id, vec)
-        )
-        con.commit()
-    except Exception:
-        pass
+    if not args.no_embed and not embeddings_disabled():
+        try:
+            import sqlite_vec
+            vec = embed(content)
+            con.enable_load_extension(True)
+            sqlite_vec.load(con)
+            con.enable_load_extension(False)
+            con.execute(
+                "INSERT INTO observations_vec(rowid, embedding) VALUES (?, ?)",
+                (row_id, vec)
+            )
+            con.commit()
+        except Exception:
+            pass
 
     con.close()
     print(f"ok {row_id}")
@@ -1228,8 +1241,8 @@ def cmd_search(args):
 
 def cmd_embed_all(args):
     """Backfill embeddings for all observations missing vectors."""
-    if os.environ.get("LSTACK_SKIP_EMBEDDINGS") == "1":
-        print("embeddings skipped by LSTACK_SKIP_EMBEDDINGS")
+    if embeddings_disabled():
+        print("embeddings skipped by environment")
         return
     ensure_deps()
     con = connect()
@@ -1956,8 +1969,8 @@ def cmd_learn_prune(args):
 def cmd_learn_embed_all(args):
     con = connect()
     init_db(con)
-    if os.environ.get("LSTACK_SKIP_EMBEDDINGS") == "1":
-        print("embeddings skipped by LSTACK_SKIP_EMBEDDINGS")
+    if embeddings_disabled():
+        print("embeddings skipped by environment")
         con.close()
         return
     if not has_learnings_vec(con) or not try_load_sqlite_vec(con):
@@ -2243,6 +2256,7 @@ def main():
     p.add_argument("project")
     p.add_argument("content")
     p.add_argument("tags", nargs="?", default="")
+    p.add_argument("--no-embed", action="store_true")
 
     p = sub.add_parser("search")
     p.add_argument("query")
