@@ -50,7 +50,7 @@ settings = {
     "hooks": {
         "SessionStart": [{"hooks": [{"type": "command", "command": session_start, "timeout": 10}]}],
         "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": pre_tool, "timeout": 30}]}],
-        "PostToolUse": [{"matcher": "Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": post_tool, "timeout": 30}]}],
+        "PostToolUse": [{"matcher": "Bash|Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": post_tool, "timeout": 30}]}],
         "PreCompact": [{"hooks": [{"type": "command", "command": pre_compact, "timeout": 60}]}],
         "Stop": [{"hooks": [{"type": "command", "command": stop, "timeout": 90}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": token_budget, "timeout": 5}]}],
