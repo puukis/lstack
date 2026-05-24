@@ -1700,28 +1700,70 @@ def cmd_learn_search(args):
             save_config({"cross_project_learnings": True})
         else:
             args.cross_project = False
-    project = normalize_project(os.path.realpath(args.project)) if args.project else None
+
+    if args.project:
+        project = normalize_project(os.path.realpath(args.project))
+    elif args.cross_project:
+        # Infer current project from cwd so project-local items are always included
+        project = normalize_project(get_project())
+    else:
+        project = None
+
     decay_enabled = (not args.no_decay) and bool(load_config().get("learning_decay_enabled", True))
     con = connect()
     try:
-        items = search_learnings(
-            con,
-            query,
-            project=project,
-            global_only=args.global_scope,
-            cross_project=args.cross_project,
-            trusted_only=args.trusted_only or args.cross_project,
-            learning_type=args.type,
-            limit=args.limit,
-            decay_enabled=decay_enabled,
-            include_superseded=args.include_superseded,
-        )
+        if args.cross_project:
+            # Pass 1: current project items (any trust level)
+            proj_items = search_learnings(
+                con, query,
+                project=project,
+                global_only=False,
+                cross_project=False,
+                trusted_only=args.trusted_only,
+                learning_type=args.type,
+                limit=args.limit,
+                decay_enabled=decay_enabled,
+                include_superseded=args.include_superseded,
+            )
+            # Pass 2: trusted items from other projects and global
+            cross_items = search_learnings(
+                con, query,
+                project=project,
+                global_only=False,
+                cross_project=True,
+                trusted_only=True,
+                learning_type=args.type,
+                limit=args.limit,
+                decay_enabled=decay_enabled,
+                include_superseded=args.include_superseded,
+            )
+            merged = dedupe_learnings(
+                proj_items + cross_items,
+                cross_project=True,
+                include_superseded=args.include_superseded,
+            )
+            items = sort_learnings(merged)[: args.limit]
+        else:
+            items = search_learnings(
+                con, query,
+                project=project,
+                global_only=args.global_scope,
+                cross_project=False,
+                trusted_only=args.trusted_only,
+                learning_type=args.type,
+                limit=args.limit,
+                decay_enabled=decay_enabled,
+                include_superseded=args.include_superseded,
+            )
     except ValueError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         con.close()
         sys.exit(2)
     con.close()
-    print_learning_results(items, args.json)
+    if not items and args.cross_project and not args.json:
+        print("No cross-project learnings found.")
+    else:
+        print_learning_results(items, args.json)
 
 
 def cmd_learn_list(args):
