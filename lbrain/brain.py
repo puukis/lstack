@@ -7,16 +7,21 @@ import sqlite3
 import sys
 
 from brain.attempts import add_attempt, list_attempts, render_attempts, search_attempts
+from brain.autolearn import autolearn_config
 from brain.capture import (
     approve_candidate,
     capture_status,
     explain_candidate,
+    explain_event,
     get_candidate,
     list_candidates,
+    list_events,
     promote_candidate,
     record_event,
     reject_candidate,
     render_candidates,
+    render_events,
+    undo_event,
 )
 from brain.context import build_context
 from brain.db import DB_PATH, connect, ensure_project, latest_passport_row, project_counts, row_to_passport
@@ -30,6 +35,21 @@ from brain.decisions import (
     render_decisions,
     search_decisions,
     seed_lstack_default_decisions,
+)
+from brain.contracts import (
+    close_contract,
+    complete_contract,
+    contract_row_to_dict,
+    create_contract,
+    explain_contract,
+    get_active_contract,
+    get_contract,
+    get_recent_events,
+    list_contracts,
+    record_test,
+    render_check_result as render_contract_check_result,
+    render_contract_status,
+    run_contract_check,
 )
 from brain.doctor import render_doctor, run_doctor
 from brain.passport import get_or_refresh_passport, passport_context, passport_summary
@@ -300,11 +320,16 @@ def cmd_capture_status(args):
     con = connect()
     project = ensure_project(con)
     data = capture_status(con, project["id"])
+    al_config = autolearn_config()
     con.close()
+    data["auto_learn_enabled"] = al_config["auto_learn_enabled"]
+    data["auto_promote_enabled"] = al_config["auto_promote_enabled"]
     if args.json:
         print_json(data)
     else:
         print("LBrain capture status")
+        print(f"Auto-learning: {'enabled' if al_config['auto_learn_enabled'] else 'disabled'}")
+        print(f"Auto-promotion: {'enabled' if al_config['auto_promote_enabled'] else 'disabled'}")
         print(f"Events: {data['events']}")
         print(f"Pending candidates: {data['pending_candidates']}")
         print(f"Approved candidates: {data['approved_candidates']}")
@@ -346,6 +371,83 @@ def cmd_capture_event(args):
         if result.get("candidate"):
             candidate = result["candidate"]
             print(f"Candidate {candidate['id']}: {candidate['title']} ({candidate['status']}, confidence {candidate['confidence']}/10)")
+    return 0
+
+
+def cmd_capture_events(args):
+    con = connect()
+    project = ensure_project(con)
+    items = list_events(con, project["id"], limit=args.limit, event_type=args.type)
+    con.close()
+    if args.json:
+        print_json({"events": items})
+    else:
+        print(render_events(items))
+    return 0
+
+
+def cmd_capture_explain_event(args):
+    con = connect()
+    project = ensure_project(con)
+    result = explain_event(con, project["id"], args.id)
+    con.close()
+    if not result:
+        print(f"Event not found: {args.id}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json(result)
+    else:
+        evt = result["event"]
+        print(f"Event {evt['id']}: {evt['event_type']} ({evt['source']})")
+        print(f"Summary: {evt['summary']}")
+        print(f"Redaction: {evt['redaction_status']}")
+        if evt.get("command_preview_redacted"):
+            print(f"Command: {evt['command_preview_redacted']}")
+        candidates = result.get("related_candidates", [])
+        if candidates:
+            print(f"Related candidates ({len(candidates)}):")
+            for c in candidates:
+                print(f"  [{c['id']}] {c['title']} status={c['status']} confidence={c['confidence']}/10")
+        else:
+            print("Related candidates: none")
+    return 0
+
+
+def cmd_capture_undo(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        result = undo_event(con, project["id"], args.id)
+    except ValueError as exc:
+        con.close()
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    con.close()
+    if args.json:
+        print_json(result)
+    else:
+        undone = result.get("undone", [])
+        if undone:
+            print(f"Undone {len(undone)} item(s) linked to event {args.id}:")
+            for u in undone:
+                print(f"  candidate {u['candidate_id']}: {u['action']}")
+        else:
+            print(f"No auto-promoted items found for event {args.id}.")
+    return 0
+
+
+def cmd_capture_autolearn(args):
+    config = autolearn_config()
+    if args.json:
+        print_json(config)
+    else:
+        print("LBrain auto-learn config")
+        print(f"Auto-learning: {'enabled' if config['auto_learn_enabled'] else 'disabled'} (LSTACK_BRAIN_AUTO_LEARN)")
+        print(f"Auto-promotion: {'enabled' if config['auto_promote_enabled'] else 'disabled'} (LSTACK_BRAIN_AUTO_PROMOTE)")
+        print(f"Max output preview: {config['max_output_preview']} chars (LSTACK_BRAIN_AUTO_LEARN_MAX_OUTPUT_PREVIEW)")
+        max_ev = config['max_events_per_session']
+        print(f"Max events/session: {'unlimited' if max_ev is None else max_ev} (LSTACK_BRAIN_AUTO_LEARN_MAX_EVENTS_PER_SESSION)")
+        print(f"Debug logging: {'on' if config['debug'] else 'off'} (LSTACK_BRAIN_AUTO_LEARN_DEBUG)")
     return 0
 
 
@@ -425,6 +527,213 @@ def cmd_capture_explain(args):
         print_json({"candidate": item})
     else:
         print(explain_candidate(item))
+    return 0
+
+
+def cmd_contract_create(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        contract = create_contract(
+            con,
+            project["id"],
+            task_goal=args.goal,
+            title=args.title,
+            mode=args.mode,
+            allowed_files=args.allow or [],
+            forbidden_files=args.deny or [],
+            allowed_commands=args.allow_command or [],
+            forbidden_commands=args.deny_command or [],
+            max_files_changed=args.max_files,
+            max_lines_changed=args.max_lines,
+            required_tests=args.required_test or [],
+            stop_conditions=args.stop_condition or [],
+            review_checklist=args.review_check or [],
+            replace=args.replace,
+        )
+    except ValueError as exc:
+        con.close()
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    con.close()
+    if args.json:
+        print_json({"contract": contract})
+    else:
+        print(render_contract_status(contract))
+    return 0
+
+
+def cmd_contract_status(args):
+    con = connect()
+    project = ensure_project(con)
+    contract = get_active_contract(con, project["id"])
+    events = get_recent_events(con, contract["id"]) if contract else []
+    con.close()
+    if args.json:
+        print_json({"active_contract": contract, "recent_events": events})
+    else:
+        print(render_contract_status(contract, events))
+    return 0
+
+
+def cmd_contract_list(args):
+    con = connect()
+    project = ensure_project(con)
+    items = list_contracts(con, project["id"], status=args.status, limit=args.limit if args.limit else 20)
+    con.close()
+    if args.json:
+        print_json({"contracts": items})
+    else:
+        if not items:
+            print("No contracts found.")
+        else:
+            for c in items:
+                title_part = f" - {c['title']}" if c.get("title") else ""
+                print(f"#{c['id']}{title_part} [{c['status']}] mode={c['mode']}: {c['task_goal'][:60]}")
+    return 0
+
+
+def cmd_contract_show(args):
+    con = connect()
+    project = ensure_project(con)
+    contract = get_contract(con, args.id)
+    if not contract or contract["project_id"] != project["id"]:
+        con.close()
+        print(f"Contract not found: {args.id}", file=sys.stderr)
+        return 1
+    events = get_recent_events(con, args.id)
+    con.close()
+    if args.json:
+        print_json({"contract": contract, "recent_events": events})
+    else:
+        print(render_contract_status(contract, events))
+    return 0
+
+
+def cmd_contract_check(args):
+    con = connect()
+    project = ensure_project(con)
+    contract = get_active_contract(con, project["id"])
+    if not contract:
+        con.close()
+        if args.json:
+            print_json({"status": "pass", "message": "No active contract."})
+        else:
+            print("No active contract. Nothing to check.")
+        return 0
+    result = run_contract_check(
+        con,
+        contract,
+        project_root=project.get("root"),
+        paths=args.path or [],
+        commands=args.command or [],
+        check_changed=args.changed_files,
+    )
+    con.close()
+    if args.json:
+        print_json(result)
+    else:
+        print(render_contract_check_result(result))
+    if result["status"] == "violation" and (args.strict_exit or contract["mode"] == "strict"):
+        return 10
+    if result.get("degraded") and not result["violations"] and not result["warnings"]:
+        return 20
+    return 0
+
+
+def cmd_contract_close(args):
+    con = connect()
+    project = ensure_project(con)
+    contract_id = args.id
+    if not contract_id:
+        active = get_active_contract(con, project["id"])
+        if not active:
+            con.close()
+            print("No active contract to close.", file=sys.stderr)
+            return 1
+        contract_id = active["id"]
+    contract = close_contract(con, contract_id, project["id"], reason=args.reason)
+    con.close()
+    if not contract:
+        print(f"Contract not found: {contract_id}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json({"contract": contract})
+    else:
+        print(f"Closed contract #{contract['id']}: {contract['task_goal'][:60]}")
+    return 0
+
+
+def cmd_contract_complete(args):
+    con = connect()
+    project = ensure_project(con)
+    contract_id = args.id
+    if not contract_id:
+        active = get_active_contract(con, project["id"])
+        if not active:
+            con.close()
+            print("No active contract to complete.", file=sys.stderr)
+            return 1
+        contract_id = active["id"]
+    contract, warnings = complete_contract(con, contract_id, project["id"], reason=args.reason)
+    con.close()
+    if not contract:
+        print(f"Contract not found: {contract_id}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json({"contract": contract, "warnings": warnings})
+    else:
+        print(f"Completed contract #{contract['id']}: {contract['task_goal'][:60]}")
+        for w in warnings:
+            print(f"Warning: {w}")
+    return 0
+
+
+def cmd_contract_explain(args):
+    con = connect()
+    project = ensure_project(con)
+    contract = get_active_contract(con, project["id"])
+    con.close()
+    if not contract:
+        if args.json:
+            print_json({"message": "No active contract."})
+        else:
+            print("No active contract.")
+        return 0
+    text = explain_contract(
+        contract,
+        path=args.path,
+        command=args.command,
+        project_root=project.get("root"),
+    )
+    if args.json:
+        print_json({"explanation": text, "contract_id": contract["id"]})
+    else:
+        print(text)
+    return 0
+
+
+def cmd_contract_record_test(args):
+    con = connect()
+    project = ensure_project(con)
+    contract = get_active_contract(con, project["id"])
+    if not contract:
+        con.close()
+        print("No active contract.", file=sys.stderr)
+        return 1
+    updated = record_test(
+        con,
+        contract["id"],
+        project["id"],
+        command=args.command,
+        result=args.result,
+        summary=args.summary,
+    )
+    con.close()
+    if args.json:
+        print_json({"contract": updated})
+    else:
+        print(f"Recorded test [{args.result}]: {args.command[:60] if args.command else '(no command)'}")
     return 0
 
 
@@ -512,6 +821,26 @@ def build_parser():
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_capture_status)
 
+    p = capture_sub.add_parser("events")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--type", dest="type", default=None)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_capture_events)
+
+    p = capture_sub.add_parser("explain-event")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_capture_explain_event)
+
+    p = capture_sub.add_parser("undo")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_capture_undo)
+
+    p = capture_sub.add_parser("autolearn")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_capture_autolearn)
+
     p = capture_sub.add_parser("event")
     p.add_argument("--type", required=True)
     p.add_argument("--summary", required=True)
@@ -552,6 +881,75 @@ def build_parser():
     p.add_argument("id", type=int)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_capture_explain)
+
+    contract = sub.add_parser("contract")
+    contract_sub = contract.add_subparsers(dest="contract_cmd")
+
+    p = contract_sub.add_parser("create")
+    p.add_argument("--goal", required=True)
+    p.add_argument("--title")
+    p.add_argument("--allow", action="append", metavar="PATTERN")
+    p.add_argument("--deny", action="append", metavar="PATTERN")
+    p.add_argument("--allow-command", action="append", metavar="PATTERN")
+    p.add_argument("--deny-command", action="append", metavar="PATTERN")
+    p.add_argument("--required-test", action="append", metavar="COMMAND")
+    p.add_argument("--stop-condition", action="append", metavar="TEXT")
+    p.add_argument("--review-check", action="append", metavar="TEXT")
+    p.add_argument("--max-files", type=int)
+    p.add_argument("--max-lines", type=int)
+    p.add_argument("--mode", default="warn", choices=("off", "warn", "strict"))
+    p.add_argument("--replace", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_create)
+
+    p = contract_sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_status)
+
+    p = contract_sub.add_parser("list")
+    p.add_argument("--all", action="store_true", dest="all_contracts")
+    p.add_argument("--status", choices=("active", "closed", "completed", "violated", "draft", "expired"))
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_list)
+
+    p = contract_sub.add_parser("show")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_show)
+
+    p = contract_sub.add_parser("check")
+    p.add_argument("--path", action="append", metavar="PATH")
+    p.add_argument("--command", action="append", metavar="COMMAND")
+    p.add_argument("--changed-files", action="store_true")
+    p.add_argument("--strict-exit", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_check)
+
+    p = contract_sub.add_parser("close")
+    p.add_argument("--id", type=int)
+    p.add_argument("--reason")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_close)
+
+    p = contract_sub.add_parser("complete")
+    p.add_argument("--id", type=int)
+    p.add_argument("--reason")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_complete)
+
+    p = contract_sub.add_parser("explain")
+    p.add_argument("--path", metavar="PATH")
+    p.add_argument("--command", metavar="COMMAND")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_explain)
+
+    p = contract_sub.add_parser("record-test")
+    p.add_argument("--command", metavar="COMMAND")
+    p.add_argument("--result", default="unknown", choices=("pass", "fail", "unknown"))
+    p.add_argument("--summary")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_contract_record_test)
 
     attempts = sub.add_parser("attempts")
     attempts_sub = attempts.add_subparsers(dest="attempts_cmd")

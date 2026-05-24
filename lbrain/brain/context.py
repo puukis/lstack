@@ -9,6 +9,15 @@ from .platform import platform_facts
 from .redaction import redact_text
 
 
+def _safe_active_contract(con, project_id):
+    """Return active contract or None, without raising if table is missing."""
+    try:
+        from .contracts import get_active_contract
+        return get_active_contract(con, project_id)
+    except Exception:
+        return None
+
+
 def _token_estimate(text):
     return max(1, len(text or "") // 4)
 
@@ -64,6 +73,16 @@ def build_context(con, project, target="codex", query=None, explain=False, debug
     included.append({"type": "passport", "id": passport["id"], "text": passport_text})
     decisions.append(("passport", passport["id"], "included", "latest Repo Passport provides commands and package manager", 2, 1.0, passport_text))
 
+    contract = _safe_active_contract(con, project["id"])
+    if contract:
+        from .contracts import contract_context_text
+        contract_text = contract_context_text(contract)
+        included.append({"type": "contract", "id": contract["id"], "text": contract_text})
+        decisions.append(("contract", contract["id"], "included", "active task contract scopes this task", 2, 1.0, contract_text))
+    else:
+        skipped.append({"type": "contract", "id": None, "reason": "no active contract for this project"})
+        decisions.append(("contract", None, "skipped", "no active contract for this project", 9, 0.0, ""))
+
     active_decisions, skipped_scoped_decisions = list_context_decisions(con, project, limit=8)
     for item in active_decisions:
         text = format_decision_context(item)
@@ -99,6 +118,18 @@ def build_context(con, project, target="codex", query=None, explain=False, debug
         decisions.append(("learning", item["id"], "included", "high-confidence structured learning available locally", 5, 0.5, text))
 
     if explain or debug:
+        # Show skipped contracts
+        try:
+            from .contracts import list_contracts
+            inactive = list_contracts(con, project["id"], limit=10)
+            for c in inactive:
+                if c["status"] in ("closed", "completed", "expired"):
+                    reason = f"contract status={c['status']} is excluded from normal context"
+                    skipped.append({"type": "contract", "id": c["id"], "reason": reason})
+                    decisions.append(("contract", c["id"], "skipped", reason, 9, 0.0, ""))
+        except Exception:
+            pass
+
         pending = list_candidates(con, project["id"], status="pending", limit=5)
         for item in pending:
             reason = "pending memory candidates are excluded from normal context"
@@ -167,7 +198,7 @@ def build_context(con, project, target="codex", query=None, explain=False, debug
     }.get(target, "LBrain context")
     lines = [title]
     for item in included:
-        if item["type"] in ("platform", "passport"):
+        if item["type"] in ("platform", "passport", "contract"):
             lines.append(item["text"])
         elif item["type"] == "decision":
             if "Implementation decisions:" not in lines:

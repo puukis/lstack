@@ -200,6 +200,134 @@ def capture_status(con, project_id):
     }
 
 
+def list_events(con, project_id, limit=20, event_type=None):
+    params = [project_id]
+    where = "project_id = ?"
+    if event_type:
+        where += " AND event_type = ?"
+        params.append(event_type)
+    rows = con.execute(
+        f"""
+        SELECT * FROM brain_capture_events
+        WHERE {where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, int(limit)),
+    ).fetchall()
+    return [event_row_to_dict(row) for row in rows]
+
+
+def explain_event(con, project_id, event_id):
+    event = get_event(con, int(event_id))
+    if not event or event["project_id"] != project_id:
+        return None
+    # Find candidates whose evidence references this event
+    rows = con.execute(
+        """
+        SELECT * FROM brain_memory_candidates
+        WHERE project_id = ?
+          AND (evidence_json LIKE ? OR command_fingerprint = ?)
+        ORDER BY created_at DESC
+        LIMIT 5
+        """,
+        (
+            project_id,
+            f'%"events": [{event_id}%',
+            event.get("command_fingerprint") or "",
+        ),
+    ).fetchall()
+    candidates = [candidate_row_to_dict(r) for r in rows if r]
+    return {"event": event, "related_candidates": candidates}
+
+
+def render_events(items):
+    if not items:
+        return "No capture events found."
+    lines = []
+    for item in items:
+        lines.append(
+            f"[{item['id']}] {item['event_type']} ({item['source']}, {item['redaction_status']})"
+        )
+        lines.append(f"  {item['summary']}")
+        if item.get("command_preview_redacted"):
+            lines.append(f"  cmd: {item['command_preview_redacted']}")
+    return "\n".join(lines)
+
+
+def undo_event(con, project_id, event_id):
+    """Undo auto-promoted items linked to an event.
+
+    Returns dict with event and list of undone actions.
+    Raises ValueError if event is not found for this project.
+    """
+    event = get_event(con, int(event_id))
+    if not event or event["project_id"] != project_id:
+        raise ValueError(f"event not found: {event_id}")
+
+    now = iso_now()
+    fp = event.get("command_fingerprint") or ""
+    undone = []
+
+    # Find promoted candidates whose evidence references this event or fingerprint
+    rows = con.execute(
+        """
+        SELECT * FROM brain_memory_candidates
+        WHERE project_id = ? AND status IN ('promoted', 'pending', 'approved')
+          AND (
+            evidence_json LIKE ?
+            OR evidence_json LIKE ?
+          )
+        """,
+        (project_id, f'%"events": [{event_id}%', f'%"command_fingerprint": "{fp}"%'),
+    ).fetchall()
+    candidates = [candidate_row_to_dict(r) for r in rows if r]
+
+    for candidate in candidates:
+        if candidate["status"] != "promoted":
+            con.execute(
+                "UPDATE brain_memory_candidates SET status = 'stale', updated_at = ? WHERE id = ? AND project_id = ?",
+                (now, candidate["id"], project_id),
+            )
+            undone.append({"candidate_id": candidate["id"], "action": "marked_stale"})
+            continue
+
+        promoted_type = candidate.get("promoted_to_type")
+        promoted_id = candidate.get("promoted_to_id")
+        action = "marked_stale"
+
+        if promoted_type == "brain_decisions" and promoted_id:
+            con.execute(
+                "UPDATE brain_decisions SET status = 'disabled', updated_at = ? WHERE id = ? AND project_id = ?",
+                (now, promoted_id, project_id),
+            )
+            action = f"disabled decision {promoted_id}"
+        elif promoted_type == "brain_attempts" and promoted_id:
+            con.execute(
+                "DELETE FROM brain_attempts WHERE id = ? AND project_id = ?",
+                (promoted_id, project_id),
+            )
+            action = f"deleted attempt {promoted_id}"
+
+        con.execute(
+            """
+            UPDATE brain_memory_candidates
+            SET status = 'stale', promoted_to_type = NULL, promoted_to_id = NULL, updated_at = ?
+            WHERE id = ? AND project_id = ?
+            """,
+            (now, candidate["id"], project_id),
+        )
+        undone.append({
+            "candidate_id": candidate["id"],
+            "promoted_type": promoted_type,
+            "promoted_id": promoted_id,
+            "action": action,
+        })
+
+    con.commit()
+    return {"event": event, "undone": undone}
+
+
 def upsert_candidate(
     con,
     project_id,
@@ -511,7 +639,7 @@ def _classify_implementation_diff(summary):
     return None
 
 
-def _candidate_from_event(con, project_id, event):
+def _candidate_from_event(con, project_id, event, allow_auto_promote=True):
     evidence = {
         "events": [event["id"]],
         "signals": [event["event_type"]],
@@ -535,7 +663,7 @@ def _candidate_from_event(con, project_id, event):
         if count < 2:
             return None
         confidence = min(10, 4 + min(count, 4) + max(0, int(event["confidence_delta"])))
-        return upsert_candidate(
+        candidate = upsert_candidate(
             con,
             project_id,
             candidate_type="failed_attempt",
@@ -549,6 +677,13 @@ def _candidate_from_event(con, project_id, event):
             source=event["source"],
             redaction_status=_candidate_redaction_status(event["redaction_status"]),
         )
+        # Auto-promote failed attempts at confidence >= 7 (3 failures = reliable signal)
+        if allow_auto_promote and candidate["confidence"] >= 7 and candidate["redaction_status"] == "clean":
+            try:
+                return promote_candidate(con, project_id, candidate["id"], auto=True)["candidate"]
+            except ValueError:
+                pass
+        return candidate
 
     if event_type == "successful_replacement":
         related = event["evidence"].get("related_command_fingerprint") or event["evidence"].get("related_fingerprint")
@@ -596,7 +731,7 @@ def _candidate_from_event(con, project_id, event):
         source=event["source"],
         redaction_status=_candidate_redaction_status(event["redaction_status"]),
     )
-    if classifier.get("auto_promote") and candidate["confidence"] >= 8 and candidate["redaction_status"] == "clean":
+    if allow_auto_promote and classifier.get("auto_promote") and candidate["confidence"] >= 8 and candidate["redaction_status"] == "clean":
         try:
             return promote_candidate(con, project_id, candidate["id"], auto=True)["candidate"]
         except ValueError:
@@ -616,6 +751,7 @@ def record_event(
     evidence=None,
     confidence_delta=0,
     privacy_class="local-only",
+    allow_auto_promote=True,
 ):
     event_type = _validate_event_type(event_type)
     summary_redacted, s_summary = redact_text(summary, max_length=800)
@@ -650,7 +786,7 @@ def record_event(
     )
     con.commit()
     event = get_event(con, cur.lastrowid)
-    candidate = _candidate_from_event(con, project_id, event)
+    candidate = _candidate_from_event(con, project_id, event, allow_auto_promote=allow_auto_promote)
     return {"event": event, "candidate": candidate}
 
 

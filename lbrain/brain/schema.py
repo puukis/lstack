@@ -13,7 +13,12 @@ PHASE_1B_TABLES = {
     "brain_memory_candidates",
 }
 
-LBRAIN_TABLES = PHASE_1A_TABLES | PHASE_1B_TABLES
+PHASE_1C_TABLES = {
+    "brain_contracts",
+    "brain_contract_events",
+}
+
+LBRAIN_TABLES = PHASE_1A_TABLES | PHASE_1B_TABLES | PHASE_1C_TABLES
 
 
 def init_schema(con):
@@ -221,6 +226,78 @@ def init_schema(con):
             ON brain_memory_candidates(confidence);
         CREATE INDEX IF NOT EXISTS idx_brain_memory_candidates_updated_at
             ON brain_memory_candidates(updated_at);
+
+        CREATE TABLE IF NOT EXISTS brain_contracts (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            session_id TEXT,
+            title TEXT,
+            task_goal TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            allowed_files_json TEXT NOT NULL,
+            forbidden_files_json TEXT NOT NULL,
+            allowed_commands_json TEXT NOT NULL,
+            forbidden_commands_json TEXT NOT NULL,
+            max_files_changed INTEGER,
+            max_lines_changed INTEGER,
+            required_tests_json TEXT NOT NULL,
+            recorded_tests_json TEXT NOT NULL DEFAULT '[]',
+            stop_conditions_json TEXT NOT NULL,
+            review_checklist_json TEXT NOT NULL,
+            notes TEXT,
+            status TEXT NOT NULL,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            privacy_class TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            started_at TEXT,
+            closed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_project_id
+            ON brain_contracts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_session_id
+            ON brain_contracts(session_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_status
+            ON brain_contracts(status);
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_project_status
+            ON brain_contracts(project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_created_at
+            ON brain_contracts(created_at);
+        CREATE INDEX IF NOT EXISTS idx_brain_contracts_updated_at
+            ON brain_contracts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS brain_contract_events (
+            id INTEGER PRIMARY KEY,
+            contract_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            session_id TEXT,
+            event_type TEXT NOT NULL,
+            tool_name TEXT,
+            path TEXT,
+            command_preview_redacted TEXT,
+            command_fingerprint TEXT,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(contract_id) REFERENCES brain_contracts(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_contract_events_contract_id
+            ON brain_contract_events(contract_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_contract_events_project_id
+            ON brain_contract_events(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_contract_events_project_session
+            ON brain_contract_events(project_id, session_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_contract_events_event_type
+            ON brain_contract_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_brain_contract_events_created_at
+            ON brain_contract_events(created_at);
         """
     )
     _ensure_column(con, "brain_decisions", "scope", "TEXT NOT NULL DEFAULT 'project'")
@@ -247,6 +324,10 @@ def missing_phase_1a_tables(con):
 
 def missing_phase_1b_tables(con):
     return sorted(PHASE_1B_TABLES - existing_tables(con))
+
+
+def missing_phase_1c_tables(con):
+    return sorted(PHASE_1C_TABLES - existing_tables(con))
 
 
 def missing_lbrain_tables(con):
