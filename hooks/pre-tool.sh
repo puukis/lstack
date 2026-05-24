@@ -41,14 +41,14 @@ print(tool_name)
 print(h)
 print(bash_cmd)
 PYEOF
-parsed="$(printf '%s' "${input}" | "${PYTHON}" "${_py_tmp_parse}" 2>/dev/null)" || true
+parsed="$(printf '%s' "${input}" | run_python "${_py_tmp_parse}" 2>/dev/null)" || true
 rm -f "${_py_tmp_parse}"
 
 tool_name="$(printf '%s' "${parsed}" | sed -n '1p')"
 input_hash="$(printf '%s' "${parsed}" | sed -n '2p')"
 bash_cmd="$(printf '%s' "${parsed}" | sed -n '3p')"
 
-# Fallback if python3 fails
+# Fallback if Python parsing fails
 if [ -z "${tool_name}" ]; then
     tool_name="unknown"
     input_hash="0000000000000000"
@@ -57,7 +57,7 @@ fi
 # LOOP DETECTION
 # State file stores last 20 {tool_name, hash} pairs as JSON array
 if [ -f "${STATE_FILE}" ]; then
-    loop_result="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo "ok"
+    loop_result="$(run_python - <<PYEOF 2>/dev/null || echo "ok"
 import json
 
 state_file = "${STATE_FILE}"
@@ -92,7 +92,7 @@ PYEOF
 )"
 else
     # Create initial state file
-    "${PYTHON}" -c "
+    run_python -c "
 import json
 with open('${STATE_FILE}', 'w') as f:
     json.dump([{'tool': '${tool_name}', 'hash': '${input_hash}'}], f)
@@ -109,7 +109,7 @@ fi
 if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
     SEM_LOOP_FILE="${LOG_DIR}/errloop-${PPID}.json"
 
-    cmd_shape="$("${PYTHON}" -c "
+    cmd_shape="$(run_python -c "
 import sys, re
 cmd = sys.argv[1].strip()
 tokens = cmd.split()
@@ -122,7 +122,7 @@ print(shape[:40])
 " "${bash_cmd}" 2>/dev/null || echo '')"
 
     if [ -n "${cmd_shape}" ]; then
-        sem_result="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo "ok"
+        sem_result="$(run_python - <<PYEOF 2>/dev/null || echo "ok"
 import json
 
 sem_file = "${SEM_LOOP_FILE}"
@@ -159,9 +159,9 @@ fi
 
 # SAFETY MODES + GLOBAL BASH SAFETY GATES
 _safety_checked=0
-if [ -n "${PYTHON}" ] && [ -f "${CLAUDE_DIR}/scripts/safety.py" ]; then
+if [ "${PYTHON_AVAILABLE:-false}" = "true" ] && [ -f "${CLAUDE_DIR}/scripts/safety.py" ]; then
     _safety_status=0
-    _safety_result="$(printf '%s' "${input}" | "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" hook 2>/dev/null)" || _safety_status=$?
+    _safety_result="$(printf '%s' "${input}" | run_python "${CLAUDE_DIR}/scripts/safety.py" hook 2>/dev/null)" || _safety_status=$?
     if [ "${_safety_status}" -eq 0 ]; then
         _safety_checked=1
         if [ -n "${_safety_result}" ]; then
@@ -204,7 +204,7 @@ if [ "${tool_name}" = "Read" ] || [ "${tool_name}" = "Bash" ]; then
     MEM_STATE_FILE="${LOG_DIR}/mem-${PPID}.json"
 
     # Increment call counter
-    _mem_call_count="$("${PYTHON}" -c "
+    _mem_call_count="$(run_python -c "
 import json,sys
 f=sys.argv[1]
 try: d=json.load(open(f))
@@ -214,7 +214,7 @@ json.dump(d,open(f,'w'))
 print(d['mem_call_count'])
 " "${MEM_STATE_FILE}" 2>/dev/null || echo "0")"
 
-    _mem_last_inject="$("${PYTHON}" -c "
+    _mem_last_inject="$(run_python -c "
 import json,sys
 try: d=json.load(open(sys.argv[1]))
 except: d={}
@@ -225,7 +225,7 @@ print(d.get('mem_last_inject',-15))
 
     if [ "${_calls_since}" -ge 15 ]; then
         # Extract file path or command for dedup check
-        _mem_file_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
+        _mem_file_path="$(printf '%s' "${input}" | run_python -c "
 import sys,json
 try:
   d=json.loads(sys.stdin.read())
@@ -234,7 +234,7 @@ try:
 except: print('')
 " 2>/dev/null || echo '')"
 
-        _already_injected="$("${PYTHON}" -c "
+        _already_injected="$(run_python -c "
 import json,sys
 try: d=json.load(open(sys.argv[1]))
 except: d={}
@@ -244,7 +244,7 @@ print('1' if sys.argv[2] in files else '0')
 
         if [ "${_already_injected}" = "0" ]; then
             # Extract keywords from the tool input
-            _mem_keywords="$("${PYTHON}" -c "
+            _mem_keywords="$(run_python -c "
 import sys,os,json
 sys.path.insert(0,os.path.expanduser('~/.claude/scripts'))
 try:
@@ -263,7 +263,7 @@ except: print('')
                 _mem_project="${_mem_project//\\//}"
 
                 # Build a richer semantic query from actual tool context
-                _sem_query="$(printf '%s' "${input}" | "${PYTHON}" -c "
+                _sem_query="$(printf '%s' "${input}" | run_python -c "
 import sys,json
 try:
   d=json.loads(sys.stdin.read())
@@ -275,21 +275,21 @@ try:
 except: print('')
 " 2>/dev/null || echo '')"
 
-                _mem_results="$("${PYTHON}" "${DB_PY}" search \
+                _mem_results="$(run_python "${DB_PY}" search \
                     "${_sem_query:-${_mem_keywords}}" \
                     --project "${_mem_project}" --limit 3 2>/dev/null || echo '[]')"
 
-                _mem_count="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
+                _mem_count="$(printf '%s' "${_mem_results}" | run_python -c "
 import sys,json
 try: print(len(json.load(sys.stdin)))
 except: print(0)
 " 2>/dev/null || echo "0")"
 
-                _learn_results="$("${PYTHON}" "${DB_PY}" learn-search \
+                _learn_results="$(run_python "${DB_PY}" learn-search \
                     "${_sem_query:-${_mem_keywords}}" \
                     --project "${_mem_project}" --limit 2 --json 2>/dev/null || echo '[]')"
 
-                _learn_inject_text="$(printf '%s' "${_learn_results}" | "${PYTHON}" -c "
+                _learn_inject_text="$(printf '%s' "${_learn_results}" | run_python -c "
 import sys,json
 try:
   items=json.load(sys.stdin)
@@ -308,7 +308,7 @@ except Exception:
 
                 _mem_inject_text=""
                 if [ "${_mem_count}" -gt 0 ]; then
-                    _mem_inject_text="$(printf '%s' "${_mem_results}" | "${PYTHON}" -c "
+                    _mem_inject_text="$(printf '%s' "${_mem_results}" | run_python -c "
 import sys,json
 try:
   items=json.load(sys.stdin)
@@ -332,11 +332,11 @@ ${_mem_inject_text}"
                 fi
 
                 if [ -n "${_mem_inject_text}" ]; then
-                    _mem_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_mem_inject_text}" 2>/dev/null)"
+                    _mem_escaped="$(run_python -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_mem_inject_text}" 2>/dev/null)"
                     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":%s}}\n' "${_mem_escaped}"
 
                     # Update state: record last inject count and file path
-                    "${PYTHON}" -c "
+                    run_python -c "
 import json,sys
 f,count,fpath=sys.argv[1],int(sys.argv[2]),sys.argv[3]
 try: d=json.load(open(f))
@@ -356,7 +356,7 @@ fi
 
 # CONTEXT PRUNER: warn when Read tool re-reads a file already in session context
 if [ "${tool_name}" = "Read" ]; then
-    read_path="$(printf '%s' "${input}" | "${PYTHON}" -c "
+    read_path="$(printf '%s' "${input}" | run_python -c "
 import sys, json, os
 data = {}
 try:
@@ -375,7 +375,7 @@ print(path)
 
     if [ -n "${read_path}" ]; then
         READS_FILE="${LOG_DIR}/reads-${PPID}.json"
-        already_read="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo 'no'
+        already_read="$(run_python - <<PYEOF 2>/dev/null || echo 'no'
 import json
 reads_file = "${READS_FILE}"
 file_path = "${read_path}"
@@ -404,13 +404,13 @@ fi
 # CONTEXT PRUNER: warn on repeated identical Bash commands
 if [ "${tool_name}" = "Bash" ] && [ -n "${bash_cmd}" ]; then
     READS_FILE="${LOG_DIR}/reads-${PPID}.json"
-    cmd_hash="$("${PYTHON}" -c "
+    cmd_hash="$(run_python -c "
 import hashlib,sys
 print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
 " "${bash_cmd}" 2>/dev/null || echo '')"
 
     if [ -n "${cmd_hash}" ]; then
-        already_run="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo '0'
+        already_run="$(run_python - <<PYEOF 2>/dev/null || echo '0'
 import json
 reads_file = "${READS_FILE}"
 cmd_key = "cmd:${cmd_hash}"

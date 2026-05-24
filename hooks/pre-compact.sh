@@ -12,7 +12,7 @@ mkdir -p "${LOG_DIR}"
 input="$(cat)"
 
 # Parse transcript_path and session_id
-parsed="$(printf '%s' "${input}" | "${PYTHON}" - <<'PYEOF' 2>/dev/null || printf '\n'
+parsed="$(printf '%s' "${input}" | run_python - <<'PYEOF' 2>/dev/null || printf '\n'
 import sys, json
 
 data = {}
@@ -30,6 +30,11 @@ transcript_path="$(printf '%s' "${parsed}" | sed -n '1p')"
 session_id="$(printf '%s' "${parsed}" | sed -n '2p')"
 
 if [ -z "${transcript_path}" ]; then
+    exit 0
+fi
+
+if [ -n "${LSTACK_INSIDE_HOOK:-}" ]; then
+    printf '[%s] PRE_COMPACT claude skipped recursion-guard\n' "$(iso_now)" >> "${LOG_DIR}/compactions.log" 2>/dev/null || true
     exit 0
 fi
 

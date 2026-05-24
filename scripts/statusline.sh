@@ -5,6 +5,11 @@
 INPUT=$(cat)
 [ -z "$INPUT" ] && printf "lstack" && exit 0
 
+if [ -f "${HOME}/.claude/scripts/os.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${HOME}/.claude/scripts/os.sh" 2>/dev/null || true
+fi
+
 # Parse with jq (fast) or python3 fallback (one subprocess call total)
 if command -v jq >/dev/null 2>&1; then
   MODEL=$(echo "$INPUT" | jq -r '.model.display_name // "?"' 2>/dev/null)
@@ -13,8 +18,8 @@ if command -v jq >/dev/null 2>&1; then
   ADD=$(echo "$INPUT"   | jq -r '.cost.total_lines_added // 0' 2>/dev/null)
   DEL=$(echo "$INPUT"   | jq -r '.cost.total_lines_removed // 0' 2>/dev/null)
   RATE=$(echo "$INPUT"  | jq -r '.rate_limits.five_hour.used_percentage // 0' 2>/dev/null | cut -d. -f1)
-else
-  PARSED=$(echo "$INPUT" | python3 -c "
+elif [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+  PARSED=$(echo "$INPUT" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -28,13 +33,15 @@ try:
 except:
   print('?|0|0.000|0|0|0')
 " 2>/dev/null || echo "?|0|0.000|0|0|0")
+else
+  PARSED="?|0|0.000|0|0|0"
+fi
   MODEL=$(echo "$PARSED" | cut -d'|' -f1)
   PCT=$(echo "$PARSED"   | cut -d'|' -f2)
   COST=$(echo "$PARSED"  | cut -d'|' -f3)
   ADD=$(echo "$PARSED"   | cut -d'|' -f4)
   DEL=$(echo "$PARSED"   | cut -d'|' -f5)
   RATE=$(echo "$PARSED"  | cut -d'|' -f6)
-fi
 
 # Defaults if parsing produced empty strings
 MODEL=${MODEL:-"?"}

@@ -14,7 +14,7 @@ mkdir -p "${LOG_DIR}"
 INPUT="$(cat)"
 
 # Extract tool name for routing
-TOOL_NAME="$(printf '%s' "${INPUT}" | "${PYTHON}" -c "
+TOOL_NAME="$(printf '%s' "${INPUT}" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -23,7 +23,7 @@ except: pass
 " 2>/dev/null || true)"
 
 # Extract file path via python3
-file_path="$(printf '%s' "${INPUT}" | "${PYTHON}" - <<'PYEOF' 2>/dev/null || true
+file_path="$(printf '%s' "${INPUT}" | run_python - <<'PYEOF' 2>/dev/null || true
 import sys, json
 
 data = {}
@@ -52,7 +52,7 @@ if [ "${TOOL_NAME}" = "Bash" ]; then
     printf '[%s] post-tool bash-tool\n' "${iso}" >> "${LOG_FILE}" 2>/dev/null || true
 
     # CONTEXT PRUNER: warn when Bash response is large
-    response_len="$(printf '%s' "${INPUT}" | "${PYTHON}" -c "
+    response_len="$(printf '%s' "${INPUT}" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -105,16 +105,16 @@ else
     printf '[%s] post-tool %s %s\n' "${iso}" "${formatter_used}" "${file_path}" >> "${LOG_FILE}" 2>/dev/null || true
 
     if [ "${rc:-0}" -ne 0 ]; then
-        escaped="$(printf '%s' "Formatter error (${formatter_used}): ${format_result}" | "${PYTHON}" -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"Formatter error"')"
+        escaped="$(printf '%s' "Formatter error (${formatter_used}): ${format_result}" | run_python -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"Formatter error"')"
         printf '{"additionalContext": %s}\n' "${escaped}"
     else
-        escaped="$(printf '%s' "Auto-formatted ${file_path} with ${formatter_used}" | "${PYTHON}" -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"Auto-formatted"')"
+        escaped="$(printf '%s' "Auto-formatted ${file_path} with ${formatter_used}" | run_python -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"Auto-formatted"')"
         printf '{"additionalContext": %s}\n' "${escaped}"
     fi
 
     # MEMORY SIGNAL: check if this is a hook/script/skill edit
     if printf '%s' "${file_path}" | grep -qE '/(hooks|scripts|skills)/'; then
-        _edit_context="$(printf '%s' "${INPUT}" | "${PYTHON}" -c "
+        _edit_context="$(printf '%s' "${INPUT}" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -130,7 +130,7 @@ except: print('')
 
         if [ -n "${_edit_context}" ]; then
             _edit_msg="You just edited a hook or script (${file_path##*/}). If you discovered a non-obvious bug or platform-specific behavior during this edit, call /remember — it will ask whether to save to project or global memory."
-            _edit_escaped="$("${PYTHON}" -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_edit_msg}" 2>/dev/null)"
+            _edit_escaped="$(run_python -c "import sys,json; print(json.dumps(sys.argv[1]))" "${_edit_msg}" 2>/dev/null)"
             printf '{"additionalContext": %s}\n' "${_edit_escaped}"
         fi
     fi
@@ -144,7 +144,7 @@ fi
 # Only fires on Bash tool (command results reveal the most learnable moments).
 
 if [ "$TOOL_NAME" = "Bash" ]; then
-  TOOL_RESPONSE=$(echo "$INPUT" | $PYTHON -c "
+  TOOL_RESPONSE=$(echo "$INPUT" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -155,7 +155,7 @@ try:
 except: pass
 " 2>/dev/null)
 
-  TOOL_CMD=$(echo "$INPUT" | $PYTHON -c "
+  TOOL_CMD=$(echo "$INPUT" | run_python -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
@@ -164,7 +164,7 @@ except: pass
 " 2>/dev/null)
 
   # Check for signals in the command + response
-  SIGNAL=$($PYTHON -c "
+  SIGNAL=$(run_python -c "
 import sys
 cmd=sys.argv[1].lower()
 resp=sys.argv[2].lower()
@@ -208,7 +208,7 @@ print(signals[0] if signals else '')
 
   if [ -n "$SIGNAL" ]; then
     # Rate limit: only nudge once per 20 tool calls max
-    NUDGE_COUNT=$($PYTHON -c "
+    NUDGE_COUNT=$(run_python -c "
 import json,sys
 f=sys.argv[1]
 try: d=json.load(open(f))
@@ -223,7 +223,7 @@ print(total-last)
 " "$STATE_FILE" 2>/dev/null || echo "99")
 
     if [ "$NUDGE_COUNT" -ge 20 ]; then
-      $PYTHON -c "
+      run_python -c "
 import json,sys
 f=sys.argv[1]
 try: d=json.load(open(f))
@@ -235,7 +235,7 @@ json.dump(d,open(f,'w'))
       SIGNAL_MSG="Memory signal: [$SIGNAL]. If this is worth keeping, call /remember — it will ask whether to save to project memory (this project only) or global memory (available in all sessions). One sentence, specific."
 
       printf '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s"}}\n' \
-        "$(echo "$SIGNAL_MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read())[1:-1])")"
+        "$(echo "$SIGNAL_MSG" | run_python -c "import sys,json; print(json.dumps(sys.stdin.read())[1:-1])")"
     fi
   fi
 fi

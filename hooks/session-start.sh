@@ -66,15 +66,15 @@ fi
 if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
     SESSION_ID="${CLAUDE_SESSION_ID}"
 else
-    SESSION_ID="$("${PYTHON}" -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
+    SESSION_ID="$(run_python -c "import os; print(os.getppid())" 2>/dev/null || echo "$$")"
 fi
 _db_project_raw="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 _db_project="$(to_native_path "${_db_project_raw}" 2>/dev/null || echo "${_db_project_raw}")"
 # Normalize to forward slashes to match stored format
 _db_project="${_db_project//\\//}"
 
-_db_result="$("${PYTHON}" "${DB_PY}" session-start "${SESSION_ID}" "${_db_project}" 2>/dev/null || true)"
-_db_context="$(printf '%s' "${_db_result}" | "${PYTHON}" -c 'import sys,json
+_db_result="$(run_python "${DB_PY}" session-start "${SESSION_ID}" "${_db_project}" 2>/dev/null || true)"
+_db_context="$(printf '%s' "${_db_result}" | run_python -c 'import sys,json
 try:
     d=json.load(sys.stdin)
     print(d.get("context",""))
@@ -96,9 +96,9 @@ fi
 # --- end lstack persistent memory ---
 
 # --- structured learnings ---
-_learn_result="$("${PYTHON}" "${DB_PY}" learn-context \
+_learn_result="$(run_python "${DB_PY}" learn-context \
     --project "${_db_project}" --limit 5 --cross-project 2>/dev/null || true)"
-_learn_context="$(printf '%s' "${_learn_result}" | "${PYTHON}" -c 'import sys,json
+_learn_context="$(printf '%s' "${_learn_result}" | run_python -c 'import sys,json
 try:
     d=json.load(sys.stdin)
     print(d.get("context",""))
@@ -126,11 +126,7 @@ elif [ -f "${CLAUDE_DIR}/memory/debrief.md" ]; then
 fi
 
 if [ -n "${_debrief_file}" ]; then
-    _debrief_age="$("${PYTHON}" -c "
-import os, time
-age = time.time() - os.path.getmtime('${_debrief_file}')
-print(int(age / 86400))
-" 2>/dev/null || echo '99')"
+    _debrief_age="$(run_python -c "import os, sys, time; age = time.time() - os.path.getmtime(sys.argv[1]); print(int(age / 86400))" "${_debrief_file}" 2>/dev/null || echo '99')"
 
     if [ "${_debrief_age}" -lt 7 ] 2>/dev/null; then
         _debrief_content="$(cat "${_debrief_file}" 2>/dev/null || true)"
@@ -149,7 +145,7 @@ fi
 # Output additionalContext if we have content
 if [ -n "${memory_content}" ]; then
     # Escape for JSON
-    escaped="$(printf '%s' "${memory_content}" | "${PYTHON}" -c "
+    escaped="$(printf '%s' "${memory_content}" | run_python -c "
 import sys, json
 content = sys.stdin.read()
 print(json.dumps(content))

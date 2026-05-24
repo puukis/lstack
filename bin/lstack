@@ -69,7 +69,7 @@ cmd_init() {
 
     # Node / TypeScript
     if [ -f "package.json" ]; then
-        pkg_name="$("${PYTHON}" -c "
+        pkg_name="$(run_python -c "
 import json
 try:
   d=json.load(open('package.json'))
@@ -78,7 +78,7 @@ except: print('')
 " 2>/dev/null)"
         [ -n "${pkg_name}" ] && detected_name="${pkg_name}"
 
-        detected_test="$("${PYTHON}" -c "
+        detected_test="$(run_python -c "
 import json
 try:
   s=json.load(open('package.json')).get('scripts',{})
@@ -87,7 +87,7 @@ try:
   else: print('')
 except: print('')
 " 2>/dev/null)"
-        detected_dev="$("${PYTHON}" -c "
+        detected_dev="$(run_python -c "
 import json
 try:
   s=json.load(open('package.json')).get('scripts',{})
@@ -95,7 +95,7 @@ try:
       if k in s: print(f'npm run {k}'); break
 except: print('')
 " 2>/dev/null)"
-        detected_build="$("${PYTHON}" -c "
+        detected_build="$(run_python -c "
 import json
 try:
   s=json.load(open('package.json')).get('scripts',{})
@@ -259,19 +259,19 @@ cmd_memory() {
     case "${subcmd}" in
         stats)
             source "${CLAUDE_DIR}/scripts/os.sh"
-            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" stats
+            run_python "${CLAUDE_DIR}/scripts/db.py" stats
             ;;
         prune)
             source "${CLAUDE_DIR}/scripts/os.sh"
-            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" prune "$@"
+            run_python "${CLAUDE_DIR}/scripts/db.py" prune "$@"
             ;;
         embed-all)
             source "${CLAUDE_DIR}/scripts/os.sh"
-            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" embed-all
+            run_python "${CLAUDE_DIR}/scripts/db.py" embed-all
             ;;
         list)
             source "${CLAUDE_DIR}/scripts/os.sh"
-            "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" list "$@"
+            run_python "${CLAUDE_DIR}/scripts/db.py" list "$@"
             ;;
         "")
             local editor="${EDITOR:-nano}"
@@ -302,9 +302,9 @@ cmd_search() {
         exit 1
     fi
 
-    results="$("${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" search "${query}" --limit 5 2>/dev/null)"
+    results="$(run_python "${CLAUDE_DIR}/scripts/db.py" search "${query}" --limit 5 2>/dev/null)"
 
-    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+    count="$(printf '%s' "${results}" | run_python -c "
 import sys,json
 try: print(len(json.load(sys.stdin)))
 except: print(0)
@@ -315,7 +315,7 @@ except: print(0)
         exit 0
     fi
 
-    printf '%s' "${results}" | "${PYTHON}" -c "
+    printf '%s' "${results}" | run_python -c "
 import sys,json
 try:
     items=json.load(sys.stdin)
@@ -423,24 +423,24 @@ cmd_status() {
 
 cmd_freeze() {
     source "${CLAUDE_DIR}/scripts/os.sh"
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" freeze "$@"
+    run_python "${CLAUDE_DIR}/scripts/safety.py" freeze "$@"
 }
 
 cmd_unfreeze() {
     source "${CLAUDE_DIR}/scripts/os.sh"
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" freeze --clear
+    run_python "${CLAUDE_DIR}/scripts/safety.py" freeze --clear
 }
 
 cmd_safety() {
     source "${CLAUDE_DIR}/scripts/os.sh"
     local subcmd="${1:-status}"
     shift 2>/dev/null || true
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" safety "${subcmd}" "$@"
+    run_python "${CLAUDE_DIR}/scripts/safety.py" safety "${subcmd}" "$@"
 }
 
 cmd_guard() {
     source "${CLAUDE_DIR}/scripts/os.sh"
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/safety.py" guard "$@"
+    run_python "${CLAUDE_DIR}/scripts/safety.py" guard "$@"
 }
 
 cmd_clean() {
@@ -501,8 +501,8 @@ cmd_clean() {
 
     # Prune persistent DB observations older than 90 days
     source "${CLAUDE_DIR}/scripts/os.sh"
-    if [ -n "${PYTHON}" ]; then
-        db_prune_out="$("${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" prune --days 90 2>/dev/null || echo "  (db.py not available)")"
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        db_prune_out="$(run_python "${CLAUDE_DIR}/scripts/db.py" prune --days 90 2>/dev/null || echo "  (db.py not available)")"
         echo "  ${db_prune_out}"
     fi
 
@@ -586,7 +586,7 @@ cmd_publish() {
 
     # Generate settings.json.example — replace absolute HOME paths with ./
     if [ -f "${CLAUDE_DIR}/settings.json" ]; then
-        python3 - "${CLAUDE_DIR}/settings.json" "${staging}/settings.json.example" <<'PYEOF' 2>/dev/null || true
+        run_python - "${CLAUDE_DIR}/settings.json" "${staging}/settings.json.example" <<'PYEOF' 2>/dev/null || true
 import sys, json, re, os
 src, dst = sys.argv[1], sys.argv[2]
 with open(src) as f:
@@ -695,9 +695,9 @@ cmd_doctor() {
         _check_fail "CLAUDE.md missing — run: lstack settings"
     fi
 
-    # settings.json valid JSON (use $PYTHON from os.sh — avoids broken Windows stub)
-    if [ -f "${CLAUDE_DIR}/settings.json" ] && [ -n "${PYTHON}" ] && \
-       "${PYTHON}" -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
+    # settings.json valid JSON through os.sh avoids broken Windows stubs.
+    if [ -f "${CLAUDE_DIR}/settings.json" ] && [ "${PYTHON_AVAILABLE:-false}" = "true" ] && \
+       run_python -m json.tool "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
         _check_pass "settings.json valid JSON"
     else
         _check_fail "settings.json invalid or missing — run: lstack settings"
@@ -719,18 +719,18 @@ cmd_doctor() {
     fi
 
     # Python 3 (sourced from os.sh)
-    if [ -n "${PYTHON}" ]; then
-        _check_pass "Python 3 found at: ${PYTHON}"
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        _check_pass "Python 3 found at: $(python_provider_label)"
     else
-        _check_fail "Python 3 not found — install python3 (https://python.org)"
+        _check_fail "Python 3 not found - install Python from python.org or make sure py -3 works in Git Bash"
     fi
 
     # DB initialized and accessible
     local _db="${CLAUDE_DIR}/memory/lstack.db"
     if [ -f "${_db}" ]; then
-        if [ -n "${PYTHON}" ]; then
+        if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
             local _stats
-            _stats="$("${PYTHON}" "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || true)"
+            _stats="$(run_python "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || true)"
             if [ -n "${_stats}" ]; then
                 _check_pass "DB accessible: ${_stats}"
             else
@@ -740,7 +740,7 @@ cmd_doctor() {
             _check_pass "DB initialized at ~/.claude/memory/lstack.db"
         fi
     else
-        _check_fail "DB not initialized — run: python3 ~/.claude/scripts/db.py init"
+        _check_fail "DB not initialized - run: lstack memory stats"
     fi
 
     # session-start.sh CLAUDE_HOME check
@@ -877,9 +877,9 @@ PREFEOF
         windows)
             printf '\n'
             printf 'Windows detected. Verifying hook paths in settings.json...\n'
-            if [ -n "${PYTHON}" ]; then
-                "${PYTHON}" "${DB_PY}" init 2>/dev/null || true
-                printf 'Python works: %s\n' "${PYTHON}"
+            if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+                run_python "${DB_PY}" init 2>/dev/null || true
+                printf 'Python works: %s\n' "$(python_provider_label)"
             fi
             printf 'Hooks use Git Bash paths (C:/Users/...). Verify in: ~/.claude/settings.json\n'
             printf 'If hooks don'\''t fire, run: lstack settings\n'
@@ -920,8 +920,8 @@ PREFEOF
     printf '  Skills:  %s skills available\n' "${_skill_count}"
     printf '  Hooks:   %s hooks configured\n' "${_hook_count}"
     local _mem_line='initialized'
-    if [ -n "${PYTHON}" ]; then
-        _mem_line="$("${PYTHON}" "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || echo 'initialized')"
+    if [ "${PYTHON_AVAILABLE:-false}" = "true" ]; then
+        _mem_line="$(run_python "${DB_PY}" stats 2>/dev/null | grep -i 'observation' | head -1 || echo 'initialized')"
     fi
     printf '  Memory:  %s\n' "${_mem_line}"
     printf '\n'
@@ -938,8 +938,8 @@ cmd_forget() {
     fi
 
     echo "Searching for: ${query}"
-    results="$("${PYTHON}" "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
-    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+    results="$(run_python "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
+    count="$(printf '%s' "${results}" | run_python -c "
 import sys,json
 try: print(len(json.load(sys.stdin)))
 except: print(0)
@@ -952,7 +952,7 @@ except: print(0)
 
     echo ""
     echo "Will delete ${count} observation(s):"
-    printf '%s' "${results}" | "${PYTHON}" -c "
+    printf '%s' "${results}" | run_python -c "
 import sys,json
 try:
     for i,it in enumerate(json.load(sys.stdin),1):
@@ -967,8 +967,8 @@ except: pass
         exit 0
     fi
 
-    result="$("${PYTHON}" "${DB_PY}" forget "${query}" 2>/dev/null)"
-    deleted="$(printf '%s' "${result}" | "${PYTHON}" -c "
+    result="$(run_python "${DB_PY}" forget "${query}" 2>/dev/null)"
+    deleted="$(printf '%s' "${result}" | run_python -c "
 import sys,json
 try: print(json.load(sys.stdin).get('deleted',0))
 except: print(0)
@@ -985,8 +985,8 @@ cmd_edit() {
         exit 1
     fi
 
-    results="$("${PYTHON}" "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
-    count="$(printf '%s' "${results}" | "${PYTHON}" -c "
+    results="$(run_python "${DB_PY}" search "${query}" --limit 10 2>/dev/null)"
+    count="$(printf '%s' "${results}" | run_python -c "
 import sys,json
 try: print(len(json.load(sys.stdin)))
 except: print(0)
@@ -998,7 +998,7 @@ except: print(0)
     fi
 
     echo "Matching observations:"
-    printf '%s' "${results}" | "${PYTHON}" -c "
+    printf '%s' "${results}" | run_python -c "
 import sys,json
 try:
     for i,it in enumerate(json.load(sys.stdin),1):
@@ -1028,12 +1028,12 @@ except Exception as e:
         content)
             printf "New content: "
             read -r new_val
-            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --content "${new_val}" 2>/dev/null)"
+            result="$(run_python "${DB_PY}" edit "${edit_id}" --content "${new_val}" 2>/dev/null)"
             ;;
         tags)
             printf "New tags (comma-separated): "
             read -r new_val
-            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --tags "${new_val}" 2>/dev/null)"
+            result="$(run_python "${DB_PY}" edit "${edit_id}" --tags "${new_val}" 2>/dev/null)"
             ;;
         scope)
             printf "New scope [project/global]: "
@@ -1043,7 +1043,7 @@ except Exception as e:
             else
                 new_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
             fi
-            result="$("${PYTHON}" "${DB_PY}" edit "${edit_id}" --project "${new_project}" 2>/dev/null)"
+            result="$(run_python "${DB_PY}" edit "${edit_id}" --project "${new_project}" 2>/dev/null)"
             ;;
         *)
             echo "Unknown field '${field}'. Use: content, tags, or scope"
@@ -1051,7 +1051,7 @@ except Exception as e:
             ;;
     esac
 
-    err="$(printf '%s' "${result}" | "${PYTHON}" -c "
+    err="$(printf '%s' "${result}" | run_python -c "
 import sys,json
 try: print(json.load(sys.stdin).get('error',''))
 except: print('')
@@ -1067,7 +1067,7 @@ except: print('')
 
 cmd_analytics() {
     source "${CLAUDE_DIR}/scripts/os.sh"
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/db.py" analytics
+    run_python "${CLAUDE_DIR}/scripts/db.py" analytics
 }
 
 cmd_learn() {
@@ -1076,20 +1076,20 @@ cmd_learn() {
     shift 2>/dev/null || true
 
     case "${subcmd}" in
-        add)                  "${PYTHON}" "${DB_PY}" learn-add "$@" ;;
-        search)               "${PYTHON}" "${DB_PY}" learn-search "$@" ;;
-        list)                 "${PYTHON}" "${DB_PY}" learn-list "$@" ;;
-        show)                 "${PYTHON}" "${DB_PY}" learn-show "$@" ;;
-        forget)               "${PYTHON}" "${DB_PY}" learn-forget "$@" ;;
-        promote)              "${PYTHON}" "${DB_PY}" learn-promote "$@" ;;
-        demote)               "${PYTHON}" "${DB_PY}" learn-demote "$@" ;;
-        stats)                "${PYTHON}" "${DB_PY}" learn-stats "$@" ;;
-        prune)                "${PYTHON}" "${DB_PY}" learn-prune "$@" ;;
-        embed-all)            "${PYTHON}" "${DB_PY}" learn-embed-all "$@" ;;
-        export)               "${PYTHON}" "${DB_PY}" learn-export "$@" ;;
-        import)               "${PYTHON}" "${DB_PY}" learn-import "$@" ;;
-        migrate-observations) "${PYTHON}" "${DB_PY}" learn-migrate-observations "$@" ;;
-        config)               "${PYTHON}" "${DB_PY}" learn-config "$@" ;;
+        add)                  run_python "${DB_PY}" learn-add "$@" ;;
+        search)               run_python "${DB_PY}" learn-search "$@" ;;
+        list)                 run_python "${DB_PY}" learn-list "$@" ;;
+        show)                 run_python "${DB_PY}" learn-show "$@" ;;
+        forget)               run_python "${DB_PY}" learn-forget "$@" ;;
+        promote)              run_python "${DB_PY}" learn-promote "$@" ;;
+        demote)               run_python "${DB_PY}" learn-demote "$@" ;;
+        stats)                run_python "${DB_PY}" learn-stats "$@" ;;
+        prune)                run_python "${DB_PY}" learn-prune "$@" ;;
+        embed-all)            run_python "${DB_PY}" learn-embed-all "$@" ;;
+        export)               run_python "${DB_PY}" learn-export "$@" ;;
+        import)               run_python "${DB_PY}" learn-import "$@" ;;
+        migrate-observations) run_python "${DB_PY}" learn-migrate-observations "$@" ;;
+        config)               run_python "${DB_PY}" learn-config "$@" ;;
         help|--help|-h|"")
             cat <<EOF
 Usage: lstack learn <command> [options]
@@ -1148,11 +1148,11 @@ cmd_sync() {
 
     if [ -f "${sync_dir}/observations.json" ]; then
         echo "Importing observations from sync..."
-        "${PYTHON}" "${DB_PY}" import "${sync_dir}/observations.json"
+        run_python "${DB_PY}" import "${sync_dir}/observations.json"
     fi
 
     echo "Exporting current observations..."
-    "${PYTHON}" "${DB_PY}" export > "${sync_dir}/observations.json"
+    run_python "${DB_PY}" export > "${sync_dir}/observations.json"
 
     git -C "${sync_dir}" add observations.json
     if ! git -C "${sync_dir}" diff --cached --quiet; then
@@ -1168,8 +1168,8 @@ cmd_mcp() {
     source "${CLAUDE_DIR}/scripts/os.sh"
     echo "Starting lstack MCP server (stdio)..."
     echo "To register with Claude Code:"
-    echo "  claude mcp add lstack -- python3 ${CLAUDE_DIR}/scripts/mcp_server.py"
-    "${PYTHON}" "${CLAUDE_DIR}/scripts/mcp_server.py"
+    echo "  claude mcp add lstack -- $(python_provider_label) ${CLAUDE_DIR}/scripts/mcp_server.py"
+    run_python "${CLAUDE_DIR}/scripts/mcp_server.py"
 }
 
 cmd_settings() {
@@ -1186,7 +1186,7 @@ cmd_settings() {
     fi
     echo "Done. Validating JSON..."
     source "${CLAUDE_DIR}/scripts/os.sh"
-    "${PYTHON}" -m json.tool "${out}" > /dev/null && echo "settings.json is valid." || echo "Warning: JSON validation failed."
+    run_python -m json.tool "${out}" > /dev/null && echo "settings.json is valid." || echo "Warning: JSON validation failed."
 }
 
 # Main dispatch

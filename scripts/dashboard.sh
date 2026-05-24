@@ -10,7 +10,7 @@ PARALLEL_DIR="${CLAUDE_DIR}/parallel"
 age_seconds() {
     local dir="$1"
     local now mtime
-    now="$("${PYTHON}" -c "import time; print(int(time.time()))" 2>/dev/null || echo 0)"
+    now="$(run_python -c "import time; print(int(time.time()))" 2>/dev/null || echo 0)"
     mtime="$(file_mtime "${dir}" 2>/dev/null || echo "${now}")"
     echo $(( now - mtime ))
 }

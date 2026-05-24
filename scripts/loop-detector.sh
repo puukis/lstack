@@ -39,7 +39,7 @@ for f in ${loop_files}; do
     fi
 
     # Get last entry
-    last="$("${PYTHON}" - <<PYEOF 2>/dev/null || echo "unknown unknown"
+    last="$(run_python - <<PYEOF 2>/dev/null || echo "unknown unknown"
 import json
 try:
     with open("${f}") as fh:

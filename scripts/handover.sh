@@ -37,6 +37,11 @@ fi
 echo "Generating handover from: ${transcript_path}"
 echo "Output: ${out_path}"
 
+if [ -n "${LSTACK_INSIDE_HOOK:-}" ]; then
+    echo "Skipped: LSTACK_INSIDE_HOOK is set."
+    exit 0
+fi
+
 claude -p --allowedTools "" \
     "Read ${transcript_path}. Write a handover summary (max 300 words, plain text, no headers):
 1. Current task and exact status
