@@ -55,6 +55,15 @@ from brain.doctor import render_doctor, run_doctor
 from brain.passport import get_or_refresh_passport, passport_context, passport_summary
 from brain.platform import platform_facts
 from brain.attempts import command_fingerprint
+from brain.governor import run_governor, governor_summary
+from brain.firewall import (
+    firewall_status,
+    firewall_explain,
+    run_firewall_check,
+    render_firewall_check,
+    render_firewall_status,
+)
+from brain.overview import build_overview
 from brain.receipts import (
     GitReceiptError,
     abandon_receipt,
@@ -946,6 +955,94 @@ def cmd_receipt_undo_hint(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Overview
+# ---------------------------------------------------------------------------
+
+def cmd_overview(args):
+    con = connect()
+    project = ensure_project(con)
+    seed_lstack_default_decisions(con, project)
+    target = getattr(args, "for_tool", None) or "claude"
+    query = getattr(args, "query", None)
+    data = build_overview(con, project, target=target, query=query)
+    con.close()
+    if args.json:
+        print_json(data)
+    else:
+        fw = data["firewall"]
+        gov = data["context_governor"]
+        cap = data["capture"]
+        print("LBrain overview")
+        print(f"Project: {data['project']['name']} on {data['project']['git_branch'] or 'unknown'}")
+        print(f"Platform: {data['platform']['os']} / {data['platform']['shell_mode']}")
+        print(f"Repo Passport: {'yes' if data['passport']['available'] else 'no'}")
+        print(f"Open Change Receipt: {data['receipts']['open']['id'] if data['receipts']['open'] else 'none'}")
+        print(f"Active Task Contract: {data['contracts']['active']['id'] if data['contracts']['active'] else 'none'}")
+        print(f"AI Mistake Firewall: {fw['status']}")
+        print(f"Context Governor: {gov['included_count']} included, {gov['skipped_count']} skipped")
+        print(f"Decisions: {data['decisions']['active_count']} active")
+        print(f"Failed attempts: {data['failed_attempts']['count']}")
+        print(f"Capture: {cap['events_count']} events, {cap['pending_candidates_count']} pending candidates")
+        print(f"Doctor: {data['doctor']['status']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Firewall commands
+# ---------------------------------------------------------------------------
+
+def cmd_firewall_status(args):
+    con = connect()
+    project = ensure_project(con)
+    data = firewall_status(con, project)
+    con.close()
+    if args.json:
+        print_json(data)
+    else:
+        print(render_firewall_status(data))
+    return 0
+
+
+def cmd_firewall_check(args):
+    con = connect()
+    project = ensure_project(con)
+    result = run_firewall_check(
+        command=args.command,
+        paths=args.path or [],
+        changed_files=args.changed_file or [],
+        tool=args.tool,
+        con=con,
+        project=project,
+    )
+    con.close()
+    if args.json:
+        print_json(result)
+    else:
+        print(render_firewall_check(result, verbose=True))
+    high_warnings = [w for w in result["warnings"] if w["severity"] == "high" and w.get("strict_exit_block")]
+    if args.strict_exit and high_warnings:
+        return 2
+    return 0
+
+
+def cmd_firewall_explain(args):
+    con = connect()
+    project = ensure_project(con)
+    data = firewall_explain(con, project)
+    con.close()
+    if args.json:
+        print_json(data)
+    else:
+        print("AI Mistake Firewall — active rules and sources")
+        print(f"Total rules: {data['rule_count']}")
+        for src in data["sources"]:
+            print(f"  {src['name']}: {src['description']}")
+        if data.get("active_decisions"):
+            print(f"Active decisions contributing: {len(data['active_decisions'])}")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="lstack brain")
     parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
@@ -972,6 +1069,32 @@ def build_parser():
     p.add_argument("--debug", action="store_true")
     p.add_argument("--query")
     p.set_defaults(func=cmd_context)
+
+    p = sub.add_parser("overview")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--for", dest="for_tool", choices=("claude", "codex", "chatgpt", "generic"))
+    p.add_argument("--query")
+    p.set_defaults(func=cmd_overview)
+
+    firewall = sub.add_parser("firewall")
+    firewall_sub = firewall.add_subparsers(dest="firewall_cmd")
+
+    p = firewall_sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_firewall_status)
+
+    p = firewall_sub.add_parser("check")
+    p.add_argument("--command")
+    p.add_argument("--path", action="append", metavar="PATH")
+    p.add_argument("--changed-file", action="append", metavar="PATH")
+    p.add_argument("--tool", choices=("Bash", "Write", "Edit", "MultiEdit"))
+    p.add_argument("--strict-exit", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_firewall_check)
+
+    p = firewall_sub.add_parser("explain")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_firewall_explain)
 
     decisions = sub.add_parser("decisions")
     decisions_sub = decisions.add_subparsers(dest="decisions_cmd")

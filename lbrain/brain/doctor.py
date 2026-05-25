@@ -382,6 +382,54 @@ def run_doctor(db_path=None):
         add("autolearn.hook_events", "warn", "Project not initialized in LBrain DB yet")
         add("autolearn.promoted", "warn", "Project not initialized in LBrain DB yet")
 
+    # --- Context Governor checks ---
+    try:
+        from .governor import run_governor
+        add("governor.available", "pass", "Context Governor module available")
+    except Exception as exc:
+        add("governor.available", "fail", f"Context Governor not available: {exc}")
+
+    if project and project_id:
+        try:
+            from .governor import run_governor
+            result = run_governor(con, {**project, "id": project_id}, target="claude")
+            inc = len(result["included"])
+            skp = len(result["skipped"])
+            add("governor.context_build", "pass", f"Context Governor built context: {inc} included, {skp} skipped")
+        except Exception as exc:
+            add("governor.context_build", "fail", f"Context Governor failed to build context: {exc}")
+    elif project:
+        add("governor.context_build", "warn", "Project not initialized in LBrain DB yet")
+
+    # --- AI Mistake Firewall checks ---
+    try:
+        from .firewall import run_firewall_check, RULE_COUNT
+        add("firewall.available", "pass", "AI Mistake Firewall module available")
+        add("firewall.rules", "pass", f"AI Mistake Firewall has {RULE_COUNT} built-in rules")
+    except Exception as exc:
+        add("firewall.available", "fail", f"AI Mistake Firewall not available: {exc}")
+
+    # --- Overview check ---
+    try:
+        from .governor import governor_summary
+        from .firewall import firewall_status
+        add("overview.available", "pass", "Brain overview is available via: lstack brain overview --json")
+    except Exception as exc:
+        add("overview.available", "fail", f"Brain overview not available: {exc}")
+
+    if project and project_id:
+        try:
+            from .governor import run_governor, governor_summary
+            from .firewall import run_firewall_check, firewall_status
+            proj_full = {**project, "id": project_id}
+            gov = governor_summary(run_governor(con, proj_full, target="claude"))
+            fw = firewall_status(con, proj_full)
+            add("overview.json", "pass", f"Overview JSON builds: governor included={gov['included_count']}, firewall rules={fw['rule_count']}")
+        except Exception as exc:
+            add("overview.json", "fail", f"Overview JSON failed: {exc}")
+    elif project:
+        add("overview.json", "warn", "Project not initialized in LBrain DB yet")
+
     con.close()
     status_order = {"pass": 0, "warn": 1, "fail": 2}
     overall = max((c["status"] for c in checks), key=lambda s: status_order[s])
