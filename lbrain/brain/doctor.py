@@ -1,6 +1,7 @@
 """Doctor checks for LBrain."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .autolearn import autolearn_config
@@ -10,7 +11,7 @@ from .passport import detect_passport
 from .platform import normalize_path, path_warnings, platform_facts
 from .project import is_lstack_project, lstack_project_signals, project_info
 from .redaction import redact_text
-from .schema import missing_phase_1a_tables, missing_phase_1b_tables, missing_phase_1c_tables
+from .schema import missing_phase_1a_tables, missing_phase_1b_tables, missing_phase_1c_tables, missing_phase_1d_tables
 
 
 def run_doctor(db_path=None):
@@ -28,38 +29,50 @@ def run_doctor(db_path=None):
     missing_1a = missing_phase_1a_tables(con)
     missing_1b = missing_phase_1b_tables(con)
     missing_1c = missing_phase_1c_tables(con)
+    missing_1d = missing_phase_1d_tables(con)
     if missing_1a:
         add(
             "schema.tables",
             "fail",
             "Missing tables: "
             + ", ".join(missing_1a)
-            + ". Run: lstack brain status to initialize Phase 1A tables safely.",
+            + ". Run: lstack brain status to initialize Repo Passport database tables safely.",
         )
     else:
-        add("schema.tables", "pass", "Phase 1A tables exist")
+        add("schema.tables", "pass", "Repo Passport and core database tables exist")
 
     if missing_1b:
         add(
-            "schema.phase1b",
+            "schema.capture",
             "fail",
-            "Missing Phase 1B tables: "
+            "Missing Capture and Decisions tables: "
             + ", ".join(missing_1b)
             + ". Run: lstack brain status to initialize LBrain tables safely.",
         )
     else:
-        add("schema.phase1b", "pass", "Phase 1B capture and decisions tables exist")
+        add("schema.capture", "pass", "Capture and Decisions database tables exist")
 
     if missing_1c:
         add(
-            "schema.phase1c",
+            "schema.task_contracts",
             "fail",
-            "Missing Phase 1C tables: "
+            "Missing Task Contracts tables: "
             + ", ".join(missing_1c)
             + ". Run: lstack brain status to initialize LBrain tables safely.",
         )
     else:
-        add("schema.phase1c", "pass", "Phase 1C contract tables exist")
+        add("schema.task_contracts", "pass", "Task Contracts database tables exist")
+
+    if missing_1d:
+        add(
+            "receipts.schema",
+            "fail",
+            "Missing Change Receipts tables: "
+            + ", ".join(missing_1d)
+            + ". Run: lstack brain status to initialize LBrain tables safely.",
+        )
+    else:
+        add("receipts.schema", "pass", "Change Receipts database tables exist")
 
     facts = platform_facts()
     add("platform.mode", "pass", f"Platform: {facts['os']}; shell mode: {facts['shell_mode']}")
@@ -215,7 +228,87 @@ def run_doctor(db_path=None):
     elif not missing_1c:
         add("contracts.active", "warn", "Project not initialized in LBrain DB yet")
     else:
-        add("contracts.active", "warn", "Phase 1C tables not yet initialized")
+        add("contracts.active", "warn", "Task Contracts database is not initialized")
+
+    if not missing_1d:
+        open_receipts = 0
+        if project_id:
+            try:
+                open_receipts = con.execute(
+                    "SELECT COUNT(*) FROM brain_change_receipts WHERE project_id = ? AND status = 'open'",
+                    (project_id,),
+                ).fetchone()[0]
+                recent_receipts = con.execute(
+                    "SELECT COUNT(*) FROM brain_change_receipts WHERE project_id = ?",
+                    (project_id,),
+                ).fetchone()[0]
+                add("receipts.open", "pass" if open_receipts else "warn", f"Open receipts: {open_receipts}")
+                add("receipts.recent", "pass", f"Receipts for current project: {recent_receipts}")
+
+                stale_rows = con.execute(
+                    """
+                    SELECT id, started_at FROM brain_change_receipts
+                    WHERE project_id = ? AND status = 'open'
+                    """,
+                    (project_id,),
+                ).fetchall()
+                stale = []
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+                for row in stale_rows:
+                    try:
+                        started = datetime.strptime(row["started_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    except Exception:
+                        stale.append(row["id"])
+                        continue
+                    if started < cutoff:
+                        stale.append(row["id"])
+                if stale:
+                    add("receipts.stale", "warn", f"Open receipt(s) older than 24h: {', '.join(map(str, stale[:5]))}")
+                else:
+                    add("receipts.stale", "pass", "No stale open receipts")
+
+                attachments = con.execute(
+                    """
+                    SELECT COUNT(*) FROM brain_change_receipt_events
+                    WHERE project_id = ? AND capture_event_id IS NOT NULL
+                    """,
+                    (project_id,),
+                ).fetchone()[0]
+                add("receipts.attachment", "pass", f"Receipt capture-event attachments: {attachments}")
+
+                suspect = con.execute(
+                    """
+                    SELECT COUNT(*) FROM brain_change_receipts
+                    WHERE project_id = ? AND redaction_status IN ('suspect', 'blocked')
+                    """,
+                    (project_id,),
+                ).fetchone()[0]
+                add("receipts.redaction", "pass" if not suspect else "warn", f"Receipts needing redaction review: {suspect}")
+            except Exception as exc:
+                add("receipts.open", "fail", f"Receipt health check failed: {exc}")
+        else:
+            add("receipts.open", "warn", "Project not initialized in LBrain DB yet")
+
+        try:
+            from .receipts import require_git_worktree, receipts_enabled
+            require_git_worktree(project["root"] if project else None)
+            add("receipts.git", "pass", "Git worktree detected for Change Receipts")
+        except Exception as exc:
+            git_status = "fail" if open_receipts else "warn"
+            add("receipts.git", git_status, str(exc))
+
+        try:
+            from .receipts import receipts_enabled
+            enabled = receipts_enabled()
+            add(
+                "receipts.hooks",
+                "pass" if enabled else "warn",
+                f"Hook receipt attachment {'enabled' if enabled else 'disabled'} (LSTACK_BRAIN_RECEIPTS)",
+            )
+        except Exception as exc:
+            add("receipts.hooks", "warn", f"Could not inspect receipt hook config: {exc}")
+    else:
+        add("receipts.open", "warn", "Change Receipts database is not initialized")
 
     add("cloud.optional", "pass", "No cloud dependency required")
     add("embeddings.optional", "pass", "Embeddings are not required")
