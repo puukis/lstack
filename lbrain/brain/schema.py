@@ -18,7 +18,12 @@ PHASE_1C_TABLES = {
     "brain_contract_events",
 }
 
-LBRAIN_TABLES = PHASE_1A_TABLES | PHASE_1B_TABLES | PHASE_1C_TABLES
+PHASE_1D_TABLES = {
+    "brain_change_receipts",
+    "brain_change_receipt_events",
+}
+
+LBRAIN_TABLES = PHASE_1A_TABLES | PHASE_1B_TABLES | PHASE_1C_TABLES | PHASE_1D_TABLES
 
 
 def init_schema(con):
@@ -298,6 +303,79 @@ def init_schema(con):
             ON brain_contract_events(event_type);
         CREATE INDEX IF NOT EXISTS idx_brain_contract_events_created_at
             ON brain_contract_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS brain_change_receipts (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            contract_id INTEGER,
+            title TEXT,
+            goal TEXT,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finalized_at TEXT,
+            git_root TEXT NOT NULL,
+            branch TEXT,
+            base_commit TEXT NOT NULL,
+            head_commit TEXT,
+            base_equals_head INTEGER,
+            working_tree_dirty_start INTEGER NOT NULL,
+            working_tree_dirty_end INTEGER,
+            files_changed_json TEXT NOT NULL,
+            diff_stat_json TEXT NOT NULL,
+            commands_json TEXT NOT NULL,
+            tests_json TEXT NOT NULL,
+            contract_check_json TEXT NOT NULL,
+            decision_check_json TEXT NOT NULL,
+            capture_event_ids_json TEXT NOT NULL,
+            auto_learned_ids_json TEXT NOT NULL,
+            summary TEXT,
+            review_notes TEXT,
+            undo_hint TEXT,
+            redaction_status TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'local-only',
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id),
+            FOREIGN KEY(contract_id) REFERENCES brain_contracts(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipts_project_id
+            ON brain_change_receipts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipts_contract_id
+            ON brain_change_receipts(contract_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipts_status
+            ON brain_change_receipts(status);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipts_project_status
+            ON brain_change_receipts(project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipts_updated_at
+            ON brain_change_receipts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS brain_change_receipt_events (
+            id INTEGER PRIMARY KEY,
+            receipt_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            command TEXT,
+            path TEXT,
+            evidence_json TEXT NOT NULL,
+            capture_event_id INTEGER,
+            created_at TEXT NOT NULL,
+            redaction_status TEXT NOT NULL,
+            FOREIGN KEY(receipt_id) REFERENCES brain_change_receipts(id),
+            FOREIGN KEY(project_id) REFERENCES brain_projects(id),
+            FOREIGN KEY(capture_event_id) REFERENCES brain_capture_events(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipt_events_receipt_id
+            ON brain_change_receipt_events(receipt_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipt_events_project_id
+            ON brain_change_receipt_events(project_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipt_events_type
+            ON brain_change_receipt_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipt_events_capture_event
+            ON brain_change_receipt_events(capture_event_id);
+        CREATE INDEX IF NOT EXISTS idx_brain_change_receipt_events_created_at
+            ON brain_change_receipt_events(created_at);
         """
     )
     _ensure_column(con, "brain_decisions", "scope", "TEXT NOT NULL DEFAULT 'project'")
@@ -328,6 +406,10 @@ def missing_phase_1b_tables(con):
 
 def missing_phase_1c_tables(con):
     return sorted(PHASE_1C_TABLES - existing_tables(con))
+
+
+def missing_phase_1d_tables(con):
+    return sorted(PHASE_1D_TABLES - existing_tables(con))
 
 
 def missing_lbrain_tables(con):
