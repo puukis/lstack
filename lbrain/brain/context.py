@@ -18,6 +18,18 @@ def _safe_active_contract(con, project_id):
         return None
 
 
+def _safe_open_receipt(con, project_id):
+    """Return the newest open receipt or None, without raising if tables are missing."""
+    try:
+        from .receipts import get_open_receipt, list_receipt_events
+        receipt = get_open_receipt(con, project_id)
+        if not receipt:
+            return None, []
+        return receipt, list_receipt_events(con, project_id, receipt["id"], limit=5)
+    except Exception:
+        return None, []
+
+
 def _token_estimate(text):
     return max(1, len(text or "") // 4)
 
@@ -82,6 +94,38 @@ def build_context(con, project, target="codex", query=None, explain=False, debug
     else:
         skipped.append({"type": "contract", "id": None, "reason": "no active contract for this project"})
         decisions.append(("contract", None, "skipped", "no active contract for this project", 9, 0.0, ""))
+
+    receipt, receipt_events = _safe_open_receipt(con, project["id"])
+    if receipt:
+        changed_count = len(receipt.get("files_changed") or [])
+        tests_count = len(receipt.get("tests") or [])
+        receipt_lines = ["Open change receipt:"]
+        receipt_lines.append(f"- Receipt #{receipt['id']}: {receipt.get('title') or '(untitled)'}")
+        if receipt.get("goal"):
+            receipt_lines.append(f"- Goal: {receipt['goal']}")
+        if receipt.get("contract_id"):
+            receipt_lines.append(f"- Linked contract: #{receipt['contract_id']}")
+        receipt_lines.append(f"- Changed files captured: {changed_count}")
+        if tests_count:
+            receipt_lines.append(f"- Tests recorded: {tests_count}")
+        else:
+            receipt_lines.append("- Tests recorded: 0 (record tests before finalizing)")
+        if debug:
+            receipt_lines.append(f"- Base/head: {receipt.get('base_commit', '')[:12]} / {(receipt.get('head_commit') or '-')[:12]}")
+            receipt_lines.append(f"- Attached events: {len(receipt.get('capture_event_ids') or [])}")
+            receipt_lines.append(f"- Commands/tests: {len(receipt.get('commands') or [])}/{tests_count}")
+        receipt_text = "\n".join(receipt_lines)
+        included.append({
+            "type": "receipt",
+            "id": receipt["id"],
+            "text": receipt_text,
+            "event_count": len(receipt_events),
+            "contract_result": (receipt.get("contract_check") or {}).get("status"),
+        })
+        decisions.append(("receipt", receipt["id"], "included", "open receipt tracks this task's audit trail", 2, 1.0, receipt_text))
+    else:
+        skipped.append({"type": "receipt", "id": None, "reason": "no open receipt for this project"})
+        decisions.append(("receipt", None, "skipped", "no open receipt for this project", 9, 0.0, ""))
 
     active_decisions, skipped_scoped_decisions = list_context_decisions(con, project, limit=8)
     for item in active_decisions:
@@ -198,7 +242,7 @@ def build_context(con, project, target="codex", query=None, explain=False, debug
     }.get(target, "LBrain context")
     lines = [title]
     for item in included:
-        if item["type"] in ("platform", "passport", "contract"):
+        if item["type"] in ("platform", "passport", "contract", "receipt"):
             lines.append(item["text"])
         elif item["type"] == "decision":
             if "Implementation decisions:" not in lines:
