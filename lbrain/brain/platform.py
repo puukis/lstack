@@ -50,6 +50,8 @@ def detect_os(env=None, system_name=None, proc_version=None):
     name = (system_name or platform_lib.system()).lower()
     if name.startswith("darwin"):
         return "macos"
+    if name.startswith("linux") and detect_wsl(env=env, proc_version=proc_version):
+        return "linux"
     if name.startswith("windows") or env.get("MSYSTEM"):
         return "windows"
     if name.startswith("linux"):
@@ -59,10 +61,10 @@ def detect_os(env=None, system_name=None, proc_version=None):
 
 def detect_shell_mode(env=None, os_name=None, proc_version=None):
     env = env if env is not None else os.environ
-    if env.get("MSYSTEM") or env.get("MINGW_PREFIX"):
-        return "git-bash"
     if (os_name or detect_os(env=env, proc_version=proc_version)) == "linux" and detect_wsl(env=env, proc_version=proc_version):
         return "wsl"
+    if env.get("MSYSTEM") or env.get("MINGW_PREFIX"):
+        return "git-bash"
     shell = env.get("SHELL", "")
     if "bash" in shell:
         return "bash"
