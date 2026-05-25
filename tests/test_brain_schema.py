@@ -13,11 +13,13 @@ from brain.schema import (
     PHASE_1A_TABLES,
     PHASE_1B_TABLES,
     PHASE_1C_TABLES,
+    PHASE_1D_TABLES,
     existing_tables,
     init_schema,
     missing_phase_1a_tables,
     missing_phase_1b_tables,
     missing_phase_1c_tables,
+    missing_phase_1d_tables,
 )
 
 
@@ -31,8 +33,11 @@ class TestBrainSchema(unittest.TestCase):
             self.assertTrue(PHASE_1A_TABLES.issubset(tables))
             self.assertTrue(PHASE_1B_TABLES.issubset(tables))
             self.assertTrue(PHASE_1C_TABLES.issubset(tables))
+            self.assertTrue(PHASE_1D_TABLES.issubset(tables))
             self.assertIn("brain_contracts", tables)
             self.assertIn("brain_contract_events", tables)
+            self.assertIn("brain_change_receipts", tables)
+            self.assertIn("brain_change_receipt_events", tables)
             self.assertNotIn("brain_receipts", tables)
             self.assertNotIn("brain_blackbox_events", tables)
             self.assertNotIn("brain_handoffs", tables)
@@ -47,6 +52,7 @@ class TestBrainSchema(unittest.TestCase):
             candidate_cols = {row[1] for row in con.execute("PRAGMA table_info(brain_memory_candidates)").fetchall()}
             self.assertEqual(missing_phase_1a_tables(con), [])
             self.assertEqual(missing_phase_1b_tables(con), [])
+            self.assertEqual(missing_phase_1d_tables(con), [])
             self.assertIn("scope", decision_cols)
             self.assertIn("scope", candidate_cols)
             con.close()
@@ -159,6 +165,34 @@ class TestBrainSchema(unittest.TestCase):
             self.assertIn("brain_contracts", tables)
             self.assertIn("brain_contract_events", tables)
 
+    def test_schema_initialization_is_idempotent_phase1d(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "lstack.db"
+            con = connect(db_path)
+            init_schema(con)
+            self.assertEqual(missing_phase_1d_tables(con), [])
+            tables = existing_tables(con)
+            con.close()
+            self.assertIn("brain_change_receipts", tables)
+            self.assertIn("brain_change_receipt_events", tables)
+
+    def test_phase1d_tables_added_to_existing_phase1c_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "lstack.db"
+            con = connect(db_path)
+            con.execute(
+                "INSERT INTO brain_projects "
+                "(root_path_hash, root_path_display, name, platform, shell_mode, created_at, updated_at) "
+                "VALUES ('h3', '/tmp/r3', 'r3', 'linux', 'bash', 'now', 'now')"
+            )
+            con.commit()
+            init_schema(con)
+            tables = existing_tables(con)
+            row = con.execute("SELECT name FROM brain_projects WHERE root_path_hash = 'h3'").fetchone()
+            con.close()
+            self.assertEqual(row[0], "r3")
+            self.assertTrue(PHASE_1D_TABLES.issubset(tables))
+
     def test_phase1c_tables_added_to_existing_phase1b_db(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "lstack.db"
@@ -192,8 +226,8 @@ class TestBrainSchema(unittest.TestCase):
             con.close()
             result = run_doctor(db_path)
             checks = {c["id"]: c for c in result["checks"]}
-            self.assertIn("schema.phase1c", checks)
-            self.assertEqual(checks["schema.phase1c"]["status"], "pass")
+            self.assertIn("schema.task_contracts", checks)
+            self.assertEqual(checks["schema.task_contracts"]["status"], "pass")
 
     def test_doctor_reports_corrupt_db(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,8 +247,8 @@ class TestBrainSchema(unittest.TestCase):
             self.assertEqual(result["status"], "fail")
             table_check = next(c for c in result["checks"] if c["id"] == "schema.tables")
             self.assertIn("lstack brain status", table_check["message"])
-            phase1b_check = next(c for c in result["checks"] if c["id"] == "schema.phase1b")
-            self.assertIn("Phase 1B", phase1b_check["message"])
+            capture_check = next(c for c in result["checks"] if c["id"] == "schema.capture")
+            self.assertIn("Capture", capture_check["message"])
             con = sqlite3.connect(str(db_path))
             tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             con.close()

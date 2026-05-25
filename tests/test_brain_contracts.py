@@ -1,4 +1,4 @@
-"""Tests for LBrain Phase 1C: Task Contracts."""
+"""Tests for LBrain Task Contracts."""
 
 import json
 import sys

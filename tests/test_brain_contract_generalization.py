@@ -1,4 +1,4 @@
-"""Tests for LBrain Phase 1C: contract generalization and cross-platform."""
+"""Tests for LBrain Task Contracts: contract generalization and cross-platform."""
 
 import json
 import sys
@@ -274,8 +274,8 @@ class TestDoctorPhase1C(unittest.TestCase):
             finally:
                 os.chdir(cwd)
             checks = {c["id"]: c for c in result["checks"]}
-            self.assertIn("schema.phase1c", checks)
-            self.assertEqual(checks["schema.phase1c"]["status"], "pass")
+            self.assertIn("schema.task_contracts", checks)
+            self.assertEqual(checks["schema.task_contracts"]["status"], "pass")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Tests for LBrain Phase 1C: contract context integration."""
+"""Tests for LBrain Task Contracts: contract context integration."""
 
 import sys
 import tempfile

@@ -69,7 +69,7 @@ class TestBrainDoctorPhase1B(unittest.TestCase):
             con.close()
             result = run_doctor(db_path)
             checks = {item["id"]: item for item in result["checks"]}
-            self.assertEqual(checks["schema.phase1b"]["status"], "fail")
+            self.assertEqual(checks["schema.capture"]["status"], "fail")
             con = sqlite3.connect(str(db_path))
             tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             con.close()
