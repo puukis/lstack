@@ -31,6 +31,63 @@ Also available:
 - Task Contracts
 - Change Receipts
 
+## Slash Commands
+
+Three Claude Code slash commands expose LBrain operations interactively.
+They are thin wrappers — all storage and logic remain in the CLI.
+
+| Command           | Purpose                                                   |
+|-------------------|-----------------------------------------------------------|
+| `/receipt`        | Manage Change Receipts                                    |
+| `/passport`       | Show Repo Passport, context, overview, or run doctor      |
+| `/work <task>`    | Structured work start with full Brain awareness           |
+
+### /receipt
+
+```
+/receipt                      — show status and help
+/receipt start <task>         — start a new Change Receipt
+/receipt status               — show open receipt and recent changes
+/receipt list                 — list recent receipts
+/receipt show <id>            — show a specific receipt
+/receipt finalize             — finalize with optional test recording
+/receipt finalize <summary>   — finalize with supplied summary
+/receipt abandon <reason>     — abandon the open receipt
+/receipt explain              — explain what the receipt recorded
+/receipt undo                 — print undo hint (does not execute)
+/receipt record-test <cmd>    — record test result for open receipt
+/receipt record-command <cmd> — record a command result
+```
+
+### /passport
+
+```
+/passport                     — show compact Repo Passport for Claude
+/passport show                — same as above
+/passport refresh             — refresh passport then show it
+/passport context             — show Context Governor output for Claude
+/passport overview            — show Brain overview
+/passport json                — show overview as JSON
+/passport doctor              — run diagnostics
+```
+
+### /work
+
+```
+/work <task>                  — overview + context + receipt + firewall, then start work
+/work continue                — resume inside the open receipt
+/work status                  — overview + receipt status + doctor
+/work context                 — context export for Claude
+```
+
+`/work <task>` runs Brain overview, Context Governor, receipt status, and AI Mistake Firewall
+precheck before any coding starts, then keeps the open receipt in scope throughout.
+
+All slash commands call `lstack brain` subcommands. The CLI remains the source of truth.
+Do not duplicate Brain storage in markdown or invent receipt/passport/context data.
+
+---
+
 ## Quick Start
 
 ```bash

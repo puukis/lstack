@@ -32,6 +32,9 @@ On-demand only. Never preload. Invoke via slash command.
 /changelog    — generate CHANGELOG.md entry from git log since last tag
 /orchestrate  — intelligent routing: evaluates complexity, asks whether to use sub-agents
                 or main session, then dispatches or proceeds accordingly
+/receipt      — manage Change Receipts: start, status, list, show, finalize, abandon, explain
+/passport     — show or refresh Repo Passport, context, overview, doctor
+/work         — structured work start: overview + context + receipt + firewall before coding
 
 ## Intent detection
 Auto-activate /interrogate when: request is a feature/system/workflow (not a bug/edit), missing who/success/constraints, and estimated work >30 min.

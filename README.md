@@ -95,6 +95,9 @@ Windows: runs in Git Bash, not WSL. All hooks support native Windows Python thro
 | /analytics     | explicitly invoked                           | observation and structured learning analytics                  |
 | /changelog     | explicitly invoked                           | generates CHANGELOG.md entry from git log since last tag       |
 | /orchestrate   | Tier 2/3 tasks detected                      | Evaluates complexity, offers sub-agent dispatch with AskUserQuestion |
+| /receipt       | explicitly invoked                           | manage Change Receipts: start, status, finalize, abandon, explain   |
+| /passport      | explicitly invoked                           | show Repo Passport, context, overview, or run doctor                |
+| /work          | explicitly invoked                           | structured work start: overview + context + receipt + firewall      |
 
 ---
 
