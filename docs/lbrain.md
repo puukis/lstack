@@ -4,9 +4,9 @@ LBrain is the local trust brain for AI coding. It helps lstack answer what kind 
 
 Distribution LBrain is a generic engine plus safe inactive templates. Project LBrain contains decisions for the current repo. User-global LBrain contains personal rules explicitly created by the user. Test fixtures are examples used only by tests.
 
-## Phase 1A and 1B
+## Features
 
-Phase 1A includes:
+Core features:
 
 - Repo Passport
 - Failed Attempt Memory
@@ -15,7 +15,7 @@ Phase 1A includes:
 - `lstack brain status`
 - `lstack brain doctor`
 
-Phase 1B adds:
+Capture and Decisions:
 
 - Persistent Implementation Decisions
 - Auto-Capture Events
@@ -25,16 +25,11 @@ Phase 1B adds:
 - Active decision context export
 - Doctor checks for decisions and candidates
 
-Intentionally deferred:
+Also available:
 
+- Automatic Learning
 - Task Contracts
 - Change Receipts
-- AI Mistake Firewall
-- Blackbox Recorder
-- Sync
-- Embeddings
-- AI-ready repo wizard
-- Hook enforcement
 
 ## Quick Start
 
@@ -135,7 +130,7 @@ The lstack repository may have project-scoped decisions such as using the lstack
 
 ## Privacy And Redaction
 
-LBrain stores Phase 1A data in the existing local SQLite database at `~/.claude/memory/lstack.db` unless `LSTACK_DB_PATH` is set. It does not require cloud services or embeddings.
+LBrain stores Repo Passport and related data in the existing local SQLite database at `~/.claude/memory/lstack.db` unless `LSTACK_DB_PATH` is set. It does not require cloud services or embeddings.
 
 Before storing failed attempts or exporting context, LBrain redacts common secret forms:
 

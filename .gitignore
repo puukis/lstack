@@ -4,7 +4,7 @@ settings.json
 .last-cleanup
 
 # Local / personal Claude Code settings
-.claude/settings.local.json
+.claude/
 AGENTS.md
 
 # Downloaded plugin marketplace data
