@@ -1,2 +1,2 @@
-"""LBrain Phase 1A local trust brain."""
+"""LBrain local trust brain."""
 

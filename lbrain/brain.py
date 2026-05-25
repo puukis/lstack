@@ -55,6 +55,24 @@ from brain.doctor import render_doctor, run_doctor
 from brain.passport import get_or_refresh_passport, passport_context, passport_summary
 from brain.platform import platform_facts
 from brain.attempts import command_fingerprint
+from brain.receipts import (
+    GitReceiptError,
+    abandon_receipt,
+    attach_capture_event,
+    explain_receipt,
+    finalize_receipt,
+    get_receipt,
+    list_receipt_events,
+    list_receipts,
+    record_command as receipt_record_command,
+    record_test as receipt_record_test,
+    render_receipt_explain,
+    render_receipt_list,
+    render_receipt_show,
+    render_receipt_status,
+    receipt_status,
+    start_receipt,
+)
 
 
 def print_json(data):
@@ -737,6 +755,197 @@ def cmd_contract_record_test(args):
     return 0
 
 
+def _receipt_error(exc):
+    print(f"Error: {exc}", file=sys.stderr)
+    return 1
+
+
+def cmd_receipt_start(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = start_receipt(
+            con,
+            project,
+            title=args.title,
+            goal=args.goal,
+            contract_id=args.contract,
+            replace=args.replace,
+            allow_multiple=args.allow_multiple,
+            source="manual",
+        )
+    except (ValueError, GitReceiptError) as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Started receipt #{receipt['id']}: {receipt.get('title') or '(untitled)'}")
+        print(f"Git: {receipt['branch'] or '-'} @ {receipt['base_commit'][:12]}")
+        if receipt.get("contract_id"):
+            print(f"Linked contract: #{receipt['contract_id']}")
+    return 0
+
+
+def cmd_receipt_status(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        data = receipt_status(con, project, require_current_git=True)
+    except (ValueError, GitReceiptError) as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json(data)
+    else:
+        print(render_receipt_status(data))
+    return 0
+
+
+def cmd_receipt_list(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        items = list_receipts(con, project["id"], status=args.status, limit=args.limit)
+    except ValueError as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipts": items})
+    else:
+        print(render_receipt_list(items))
+    return 0
+
+
+def cmd_receipt_show(args):
+    con = connect()
+    project = ensure_project(con)
+    receipt = get_receipt(con, project["id"], args.id)
+    events = list_receipt_events(con, project["id"], args.id, limit=50) if receipt else []
+    con.close()
+    if not receipt:
+        print(f"Receipt not found: {args.id}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json({"receipt": receipt, "events": events})
+    else:
+        print(render_receipt_show(receipt, events))
+    return 0
+
+
+def cmd_receipt_finalize(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = finalize_receipt(con, project, receipt_id=args.id, summary=args.summary)
+    except (ValueError, GitReceiptError) as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Finalized receipt #{receipt['id']}: {receipt.get('summary') or receipt.get('title') or '(untitled)'}")
+        print(f"Head: {receipt.get('head_commit') or '-'}")
+        print(f"Changed files: {len(receipt.get('files_changed') or [])}")
+    return 0
+
+
+def cmd_receipt_abandon(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = abandon_receipt(con, project["id"], receipt_id=args.id, reason=args.reason)
+    except ValueError as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Abandoned receipt #{receipt['id']}: {receipt.get('summary') or ''}".rstrip())
+    return 0
+
+
+def cmd_receipt_attach_event(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = attach_capture_event(con, project["id"], args.capture_event, receipt_id=args.receipt)
+    except ValueError as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Attached capture event #{args.capture_event} to receipt #{receipt['id']}")
+    return 0
+
+
+def cmd_receipt_record_command(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = receipt_record_command(con, project["id"], args.command, result=args.result)
+    except ValueError as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Recorded command on receipt #{receipt['id']}: {args.result}")
+    return 0
+
+
+def cmd_receipt_record_test(args):
+    con = connect()
+    project = ensure_project(con)
+    try:
+        receipt = receipt_record_test(con, project["id"], args.command, result=args.result)
+    except ValueError as exc:
+        con.close()
+        return _receipt_error(exc)
+    con.close()
+    if args.json:
+        print_json({"receipt": receipt})
+    else:
+        print(f"Recorded test on receipt #{receipt['id']}: {args.result}")
+    return 0
+
+
+def cmd_receipt_explain(args):
+    con = connect()
+    project = ensure_project(con)
+    data = explain_receipt(con, project, receipt_id=args.id)
+    con.close()
+    if args.json:
+        print_json(data)
+    else:
+        print(render_receipt_explain(data))
+    return 0
+
+
+def cmd_receipt_undo_hint(args):
+    con = connect()
+    project = ensure_project(con)
+    if args.id:
+        receipt = get_receipt(con, project["id"], args.id)
+    else:
+        open_items = list_receipts(con, project["id"], status="open", limit=1)
+        receipt = open_items[0] if open_items else (list_receipts(con, project["id"], limit=1)[0] if list_receipts(con, project["id"], limit=1) else None)
+    con.close()
+    if not receipt:
+        print("No receipt found.", file=sys.stderr)
+        return 1
+    print(receipt.get("undo_hint") or "Use git diff and git diff --stat to inspect changes before undoing anything.")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="lstack brain")
     parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
@@ -950,6 +1159,72 @@ def build_parser():
     p.add_argument("--summary")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_contract_record_test)
+
+    receipt = sub.add_parser("receipt")
+    receipt_sub = receipt.add_subparsers(dest="receipt_cmd")
+
+    p = receipt_sub.add_parser("start")
+    p.add_argument("--title")
+    p.add_argument("--goal")
+    p.add_argument("--contract", type=int)
+    p.add_argument("--replace", action="store_true")
+    p.add_argument("--allow-multiple", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_start)
+
+    p = receipt_sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_status)
+
+    p = receipt_sub.add_parser("list")
+    p.add_argument("--status", choices=("open", "finalized", "abandoned"))
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_list)
+
+    p = receipt_sub.add_parser("show")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_show)
+
+    p = receipt_sub.add_parser("finalize")
+    p.add_argument("--id", type=int)
+    p.add_argument("--summary")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_finalize)
+
+    p = receipt_sub.add_parser("abandon")
+    p.add_argument("--id", type=int)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_abandon)
+
+    p = receipt_sub.add_parser("attach-event")
+    p.add_argument("--receipt", type=int)
+    p.add_argument("--capture-event", type=int, required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_attach_event)
+
+    p = receipt_sub.add_parser("record-command")
+    p.add_argument("--command", required=True)
+    p.add_argument("--result", default="unknown", choices=("pass", "fail", "unknown"))
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_record_command)
+
+    p = receipt_sub.add_parser("record-test")
+    p.add_argument("--command", required=True)
+    p.add_argument("--result", default="unknown", choices=("pass", "fail", "unknown"))
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_record_test)
+
+    p = receipt_sub.add_parser("explain")
+    p.add_argument("--id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_receipt_explain)
+
+    p = receipt_sub.add_parser("undo-hint")
+    p.add_argument("--id", type=int)
+    p.set_defaults(func=cmd_receipt_undo_hint)
 
     attempts = sub.add_parser("attempts")
     attempts_sub = attempts.add_subparsers(dest="attempts_cmd")
