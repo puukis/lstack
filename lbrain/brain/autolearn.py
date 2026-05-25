@@ -312,6 +312,19 @@ def _maybe_record_package_manager(con, project_id, session_id, cwd=None):
         return None
 
 
+def _maybe_attach_receipt(con, project, result, tool_name=None, file_path=None):
+    """Best-effort receipt attachment for hook-created capture events."""
+    try:
+        if not result or not result.get("event"):
+            return None
+        from .receipts import attach_hook_event
+        event_id = result["event"]["id"]
+        return attach_hook_event(con, project, event_id, tool_name=tool_name, file_path=file_path)
+    except Exception as exc:
+        _debug_log(f"receipt attach skipped: {exc}")
+        return None
+
+
 # ── Core processing ───────────────────────────────────────────────────────────
 
 
@@ -369,8 +382,10 @@ def process_hook_payload(payload, cwd=None):
         results = []
 
         # Once-per-day ambient signals
-        _maybe_record_platform_detection(con, project_id, session_id)
-        _maybe_record_package_manager(con, project_id, session_id, cwd=effective_cwd)
+        ambient = _maybe_record_platform_detection(con, project_id, session_id)
+        _maybe_attach_receipt(con, project, ambient, tool_name=tool_name, file_path=file_path)
+        ambient = _maybe_record_package_manager(con, project_id, session_id, cwd=effective_cwd)
+        _maybe_attach_receipt(con, project, ambient, tool_name=tool_name, file_path=file_path)
 
         # Bash tool events
         if tool_name == "Bash":
@@ -389,6 +404,7 @@ def process_hook_payload(payload, cwd=None):
                         allow_auto_promote=is_autopromote_enabled(),
                     )
                     results.append(result)
+                    _maybe_attach_receipt(con, project, result, tool_name=tool_name, file_path=file_path)
                     _debug_log(
                         f"recorded {event_type}: event={result['event']['id']}"
                         + (f" candidate={result['candidate']['id']}" if result.get("candidate") else "")
@@ -412,6 +428,7 @@ def process_hook_payload(payload, cwd=None):
                     allow_auto_promote=is_autopromote_enabled(),
                 )
                 results.append(result)
+                _maybe_attach_receipt(con, project, result, tool_name=tool_name, file_path=file_path)
                 _debug_log(f"recorded implementation_diff: event={result['event']['id']}")
             except Exception as exc:
                 _debug_log(f"record_event error (implementation_diff): {exc}")

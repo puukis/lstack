@@ -19,6 +19,7 @@ EVENT_TYPES = {
     "doctor_result",
     "test_result",
     "regression_signal",
+    "receipt_finalized",
 }
 
 CANDIDATE_TYPES = {
