@@ -46,6 +46,10 @@ file-history/
 __pycache__/
 *.py[cod]
 
+# Frontend dependencies and dev caches
+node_modules/
+.vite/
+
 # History
 history.jsonl
 

@@ -37,7 +37,12 @@ Commands:
   safety strict     Deny risky Bash commands this session
   safety off        Disable opt-in safety checks this session
   clean             Prune logs >30 days; remove loop/reads state for dead PIDs
-  dashboard         Live display of parallel agent worktrees
+  dashboard [--port N] [--host H] [--open] [--no-open] [--allow-lan]
+                    Start local browser dashboard (default: http://127.0.0.1:8765)
+  dashboard --json  Print LStack-wide dashboard overview JSON
+  dashboard --dev   Start Python API + Vite dev server (requires bun install in dashboard/frontend)
+  dashboard --parallel
+                    Live terminal display of parallel agent worktrees (legacy)
   upgrade           Pull latest lstack from git origin
   publish           Package lstack for open-source sharing
   forget [query]    Delete matching observations from persistent memory
@@ -525,7 +530,49 @@ cmd_clean() {
 }
 
 cmd_dashboard() {
-    exec bash "${CLAUDE_DIR}/scripts/dashboard.sh"
+    source "${CLAUDE_DIR}/scripts/os.sh"
+
+    # --parallel preserves old terminal parallel worktree monitor
+    for _arg in "$@"; do
+        if [ "${_arg}" = "--parallel" ]; then
+            exec bash "${CLAUDE_DIR}/scripts/dashboard.sh"
+        fi
+    done
+
+    # --dev: start Python API on :8765 in background + Vite dev server
+    for _arg in "$@"; do
+        if [ "${_arg}" = "--dev" ]; then
+            local _frontend="${CLAUDE_DIR}/dashboard/frontend"
+            if [ ! -d "${_frontend}/node_modules" ]; then
+                echo "Frontend dependencies not installed. Run:" >&2
+                echo "  cd ${_frontend} && bun install" >&2
+                exit 1
+            fi
+            echo "Starting LStack Dashboard in dev mode..."
+            echo "  API server  : http://127.0.0.1:8765"
+            echo "  Dev server  : http://127.0.0.1:5173"
+            if [ "${PYTHON_AVAILABLE:-false}" != "true" ]; then
+                echo "Error: Python 3 is required for lstack dashboard." >&2
+                exit 5
+            fi
+            # Start Python API backend in background
+            run_python "${CLAUDE_DIR}/scripts/dashboard_server.py" --no-open &
+            local _api_pid=$!
+            trap "kill ${_api_pid} 2>/dev/null; exit 0" INT TERM
+            sleep 1
+            # Start Vite dev server in foreground
+            cd "${_frontend}" && bun run dev
+            kill "${_api_pid}" 2>/dev/null
+            return 0
+        fi
+    done
+
+    # All other flags pass through to the Python server
+    if [ "${PYTHON_AVAILABLE:-false}" != "true" ]; then
+        echo "Error: Python 3 is required for lstack dashboard. On Windows Git Bash, ensure py -3 works." >&2
+        exit 5
+    fi
+    run_python "${CLAUDE_DIR}/scripts/dashboard_server.py" "$@"
 }
 
 cmd_upgrade() {

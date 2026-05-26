@@ -360,7 +360,12 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 | lstack safety strict  | Deny risky Bash commands this session            |
 | lstack safety off     | Disable opt-in safety checks this session        |
 | lstack guard PATH     | Enable careful mode plus freeze boundary         |
-| lstack dashboard      | Live display of parallel agent worktrees         |
+| lstack dashboard      | Start local browser dashboard (http://127.0.0.1:8765) |
+| lstack dashboard --json | Print LStack-wide dashboard overview JSON      |
+| lstack dashboard --parallel | Live terminal display of parallel agent worktrees (legacy) |
+| lstack dashboard --port N | Use custom port                              |
+| lstack dashboard --open | Open browser automatically                     |
+| lstack dashboard --allow-lan | Bind to non-localhost (warning printed)    |
 | lstack clean          | Prune logs and dead loop state files             |
 | lstack upgrade        | Pull latest lstack from git                      |
 | lstack publish        | Package lstack for sharing (strips personal data)|
@@ -379,6 +384,33 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
 | lstack learn demote   | Mark a learning untrusted                        |
 | lstack learn prune    | Prune old, low-confidence, or superseded learnings|
 | lstack learn export/import | Backup or restore structured learnings      |
+
+---
+
+## LStack Dashboard
+
+`lstack dashboard` starts a local, read-only browser dashboard for the whole lstack system.
+
+```bash
+lstack dashboard              # start at http://127.0.0.1:8765
+lstack dashboard --json       # print LStack-wide overview JSON (no server)
+lstack dashboard --parallel   # legacy terminal parallel worktree monitor
+lstack dashboard --port 9000  # custom port
+lstack dashboard --open       # open browser automatically
+lstack dashboard --allow-lan  # bind to non-localhost (prints warning)
+```
+
+**LBrain is one section inside the dashboard.** The dashboard is LStack-wide and covers:
+install/settings, runtime, hooks, skills, agents, memory, health, parallel worktrees, LBrain, doctor, and future actions.
+
+**V1 properties:**
+- Local only — binds to `127.0.0.1` by default
+- Read-only — no mutations, no git actions, no command runner
+- No cloud dependency
+- No remote assets (all HTML/CSS/JS inline)
+- No database writes
+- Future interactive buttons are shown as disabled ("coming later")
+- `--allow-lan` required to bind outside localhost
 
 ---
 
@@ -410,7 +442,8 @@ Tools exposed: `memory_search`, `memory_store`, `memory_stats`.
     │   ├── statusline.sh          macOS and Linux statusline
     │   ├── token-budget.sh        Context usage warnings
     │   ├── gen-settings.sh        OS-aware settings.json generator
-    │   └── dashboard.sh           Parallel agent monitor
+    │   ├── dashboard.sh           Parallel agent terminal monitor (legacy)
+    │   └── dashboard_server.py    LStack browser dashboard server
     ├── skills/                    skill subdirectories (SKILL.md each)
     ├── memory/
     │   ├── MEMORY.md              Global memory index
