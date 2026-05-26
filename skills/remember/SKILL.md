@@ -12,7 +12,7 @@ Invoked via `/remember`. Use when the user asks to remember something or when a
 confirmed, reusable learning should survive future sessions.
 
 ## Default Path
-Use structured learnings through `db.py learn-add`.
+Use structured learnings through `lstack learn add`.
 
 If the user says "remember that I prefer X":
 - type: `preference`
@@ -50,7 +50,7 @@ tooling facts. Cross-project injection only uses trusted learnings.
 Project:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-add \
+lstack learn add \
   --type pitfall \
   --key auth-token-expiry \
   --insight "JWT refresh fails when clock skew exceeds 30s" \
@@ -62,7 +62,7 @@ python3 ~/.claude/scripts/db.py learn-add \
 Global user preference:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-add \
+lstack learn add \
   --type preference \
   --key no-comments-default \
   --insight "User prefers code without comments unless WHY is non-obvious" \

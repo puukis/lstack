@@ -32,7 +32,7 @@ Ask for any missing value:
 ## Command
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-add \
+lstack learn add \
   --type pitfall \
   --key auth-token-expiry \
   --insight "JWT refresh fails when clock skew exceeds 30s" \
@@ -44,7 +44,7 @@ python3 ~/.claude/scripts/db.py learn-add \
 For global user-stated preferences:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-add \
+lstack learn add \
   --type preference \
   --key no-comments-default \
   --insight "User prefers code without comments unless WHY is non-obvious" \

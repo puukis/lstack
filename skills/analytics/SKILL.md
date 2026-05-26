@@ -15,19 +15,19 @@ decay status, repeated keys, or scope breakdowns.
 Overall analytics:
 
 ```bash
-python3 ~/.claude/scripts/db.py analytics
+lstack analytics
 ```
 
 Structured learning stats only:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-stats
+lstack learn stats
 ```
 
 Machine-readable structured stats:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-stats --json
+lstack learn stats --json
 ```
 
 ## Report

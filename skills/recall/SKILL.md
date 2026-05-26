@@ -15,13 +15,13 @@ or needs to correct stale memory.
 1. Search structured learnings first:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-search "[query]" --json --limit 10
+lstack learn search "[query]" --json --limit 10
 ```
 
 2. Search legacy observations second:
 
 ```bash
-python3 ~/.claude/scripts/db.py search "[query]" --limit 10
+lstack search "[query]"
 ```
 
 Clearly separate the two result groups. Structured learnings show `type`,
@@ -32,20 +32,20 @@ files. Legacy observations show date, scope, content, and tags.
 Structured:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-list --limit 10 --json
+lstack learn list --limit 10 --json
 ```
 
 Legacy:
 
 ```bash
-python3 ~/.claude/scripts/db.py session-start "recall-query" "[project]"
+lstack search "[query]"
 ```
 
 ## Cross-Project Recall
 Only use cross-project search when the user asks for it:
 
 ```bash
-python3 ~/.claude/scripts/db.py learn-search "[query]" --cross-project --json
+lstack learn search "[query]" --cross-project --json
 ```
 
 Cross-project structured search automatically returns trusted learnings only.
@@ -56,10 +56,10 @@ projects as context.
 If a structured learning is wrong:
 1. Show the matching learning.
 2. Ask for confirmation.
-3. Delete it with `learn-forget --id ID`, or demote it with `learn-demote --id ID`.
+3. Delete it with `lstack learn forget --id ID`, or demote it with `lstack learn demote --id ID`.
 4. Store the corrected version with `/remember` if needed.
 
-If a legacy observation is wrong, preview matches and use `db.py forget`.
+If a legacy observation is wrong, preview matches and use `lstack forget [query]`.
 
 ## Constraints
 - Never invent memory content.
